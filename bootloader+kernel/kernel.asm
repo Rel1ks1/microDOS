@@ -2,36 +2,79 @@
 [bits 16]
 
 start:
-    cli                 ; Отключаем прерывания при настройке сегментов и стека
-    cld                 ; Сбрасываем флаг направления (DF=0, движение вперед)
+    cli
+    cld
     mov ax, 0x1000
     mov ds, ax
     mov es, ax
     mov ss, ax
     mov sp, 0xFF00
-    sti                 ; Включаем прерывания обратно
+    sti
 
     call clear_screen
-
     mov si, banner
     call print_string
-
     call shell
 
 ; базовые функции
 
 print_string:
     push ax
+    push bx
+    push cx
+    push dx
     push si
 .loop:
     lodsb
     or al, al
     jz .done
-    mov ah, 0x0e
+    cmp al, 0x0d
+    je .handle_cr
+    cmp al, 0x0a
+    je .handle_lf
+    mov ah, 0x09
+    mov bh, 0
+    mov bl, 0x0F
+    mov cx, 1
+    int 0x10
+    mov ah, 0x03
+    mov bh, 0
+    int 0x10
+    inc dl
+    mov ah, 0x02
+    int 0x10
+    jmp .loop
+.handle_cr:
+    mov ah, 0x03
+    mov bh, 0
+    int 0x10
+    mov dl, 0
+    mov ah, 0x02
+    int 0x10
+    jmp .loop
+.handle_lf:
+    mov ah, 0x03
+    mov bh, 0
+    int 0x10
+    inc dh
+    cmp dh, 25
+    jb .set_cursor
+    mov ax, 0x0601
+    mov bh, 0x0F
+    xor cx, cx
+    mov dx, 0x184F
+    int 0x10
+    mov dh, 24
+.set_cursor:
+    mov ah, 0x02
+    mov bh, 0
     int 0x10
     jmp .loop
 .done:
     pop si
+    pop dx
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -51,6 +94,8 @@ newline:
 
 read_line:
     push ax
+    push bx
+    push dx
     push di
     push cx
     xor cx, cx
@@ -66,7 +111,20 @@ read_line:
     jae .loop
     stosb
     inc cx
-    mov ah, 0x0e
+    push ax
+    mov ah, 0x09
+    mov bh, 0
+    mov bl, 0x0F
+    push cx
+    mov cx, 1
+    int 0x10
+    pop cx
+    pop ax
+    mov ah, 0x03
+    mov bh, 0
+    int 0x10
+    inc dl
+    mov ah, 0x02
     int 0x10
     jmp .loop
 .backspace:
@@ -75,13 +133,19 @@ read_line:
     dec cx
     dec di
     mov byte [di], 0
-    mov ah, 0x0e
-    mov al, 0x08
+    mov ah, 0x03
+    mov bh, 0
     int 0x10
-    mov al, ' '
+    dec dl
+    mov ah, 0x02
     int 0x10
-    mov al, 0x08
+    mov ax, 0x0920
+    mov bh, 0
+    mov bl, 0x0F
+    push cx
+    mov cx, 1
     int 0x10
+    pop cx
     jmp .loop
 .enter:
     xor al, al
@@ -89,6 +153,8 @@ read_line:
     call newline
     pop cx
     pop di
+    pop dx
+    pop bx
     pop ax
     ret
 
@@ -132,13 +198,30 @@ print_hex:
     ret
 
 print_nibble:
+    push ax
+    push bx
+    push cx
+    push dx
     add al, '0'
     cmp al, '9'
     jle .digit
     add al, 7
 .digit:
-    mov ah, 0x0e
+    mov ah, 0x09
+    mov bh, 0
+    mov bl, 0x0F
+    mov cx, 1
     int 0x10
+    mov ah, 0x03
+    mov bh, 0
+    int 0x10
+    inc dl
+    mov ah, 0x02
+    int 0x10
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; командная оболочка
@@ -190,6 +273,12 @@ shell:
     call strcmp
     jc .calc
 
+    ; snake
+    mov si, input_buffer
+    mov di, cmd_snake
+    call strcmp
+    jc .snake
+
     ; unknown
     cmp byte [input_buffer], 0
     je shell
@@ -227,7 +316,249 @@ shell:
     call do_calc
     jmp shell
 
-; как команды будут выглядеть
+.snake:
+    call do_snake
+    jmp shell
+
+; змейка
+do_snake:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    call clear_screen
+
+    mov ah, 0x01
+    mov cx, 0x2607
+    int 0x10
+
+    mov byte [snake_len], 3
+    mov byte [snake_dir], 1
+    mov byte [snake_x], 40
+    mov byte [snake_y], 12
+    mov byte [snake_x + 1], 39
+    mov byte [snake_y + 1], 12
+    mov byte [snake_x + 2], 38
+    mov byte [snake_y + 2], 12
+    mov byte [apple_x], 20
+    mov byte [apple_y], 8
+
+.game_loop:
+    mov ah, 0x02
+    mov bh, 0
+    mov dl, [apple_x]
+    mov dh, [apple_y]
+    int 0x10
+    mov ax, 0x092A
+    mov bl, 0x0F
+    mov cx, 1
+    int 0x10
+
+    xor cx, cx
+    mov cl, [snake_len]
+    xor si, si
+.draw_snake:
+    mov ah, 0x02
+    mov bh, 0
+    mov dl, [snake_x + si]
+    mov dh, [snake_y + si]
+    int 0x10
+    mov ax, 0x0923
+    mov bl, 0x0F
+    push cx
+    mov cx, 1
+    int 0x10
+    pop cx
+    inc si
+    loop .draw_snake
+
+    mov cx, 1
+    mov dx, 0x8000
+    mov ah, 0x86
+    int 0x15
+
+    mov ah, 0x01
+    int 0x16
+    jz .move_snake
+    xor ax, ax
+    int 0x16
+    cmp al, 27
+    je .exit_game
+    cmp ah, 0x48
+    je .key_up
+    cmp ah, 0x50
+    je .key_down
+    cmp ah, 0x4B
+    je .key_left
+    cmp ah, 0x4D
+    je .key_right
+    cmp al, 'w'
+    je .key_up
+    cmp al, 's'
+    je .key_down
+    cmp al, 'a'
+    je .key_left
+    cmp al, 'd'
+    je .key_right
+    jmp .move_snake
+
+.key_up:
+    cmp byte [snake_dir], 2
+    je .move_snake
+    mov byte [snake_dir], 0
+    jmp .move_snake
+.key_right:
+    cmp byte [snake_dir], 3
+    je .move_snake
+    mov byte [snake_dir], 1
+    jmp .move_snake
+.key_down:
+    cmp byte [snake_dir], 0
+    je .move_snake
+    mov byte [snake_dir], 2
+    jmp .move_snake
+.key_left:
+    cmp byte [snake_dir], 1
+    je .move_snake
+    mov byte [snake_dir], 3
+    jmp .move_snake
+
+.move_snake:
+    ; Стираем последний сегмент хвоста перед сдвигом
+    xor ah, ah
+    mov al, [snake_len]
+    dec ax
+    mov si, ax
+    mov ah, 0x02
+    mov bh, 0
+    mov dl, [snake_x + si]
+    mov dh, [snake_y + si]
+    int 0x10
+    mov ax, 0x0920
+    mov bl, 0x0F
+    mov cx, 1
+    int 0x10
+
+    ; Сдвиг координат тела (от хвоста к голове)
+    xor ch, ch
+    mov cl, [snake_len]
+    dec cx
+    mov si, cx
+.shift_body:
+    mov al, [snake_x + si - 1]
+    mov [snake_x + si], al
+    mov al, [snake_y + si - 1]
+    mov [snake_y + si], al
+    dec si
+    loop .shift_body
+
+    ; Движение головы
+    mov al, [snake_x]
+    mov ah, [snake_y]
+    cmp byte [snake_dir], 0
+    je .go_up
+    cmp byte [snake_dir], 1
+    je .go_right
+    cmp byte [snake_dir], 2
+    je .go_down
+    cmp byte [snake_dir], 3
+    je .go_left
+
+.go_up:
+    dec ah
+    jmp .apply_pos
+.go_right:
+    inc al
+    jmp .apply_pos
+.go_down:
+    inc ah
+    jmp .apply_pos
+.go_left:
+    dec al
+
+.apply_pos:
+    cmp al, 80
+    jae .game_over
+    cmp ah, 25
+    jae .game_over
+    mov [snake_x], al
+    mov [snake_y], ah
+
+    mov cl, [snake_len]
+    dec cl
+    xor ch, ch
+    mov si, 1
+.check_self:
+    mov al, [snake_x]
+    cmp al, [snake_x + si]
+    jne .next_seg
+    mov ah, [snake_y]
+    cmp ah, [snake_y + si]
+    je .game_over
+.next_seg:
+    inc si
+    loop .check_self
+
+    mov al, [snake_x]
+    cmp al, [apple_x]
+    jne .game_loop
+    mov al, [snake_y]
+    cmp al, [apple_y]
+    jne .game_loop
+
+    cmp byte [snake_len], 60
+    jae .spawn_apple
+    inc byte [snake_len]
+
+.spawn_apple:
+    mov ah, 0x00
+    int 0x1a
+    mov ax, dx
+    and ax, 0x00FF
+    xor dx, dx
+    mov bx, 76
+    div bx
+    inc dl
+    inc dl
+    mov [apple_x], dl
+
+    mov ah, 0x00
+    int 0x1a
+    mov ax, dx
+    shr ax, 4
+    and ax, 0x00FF
+    xor dx, dx
+    mov bx, 21
+    div bx
+    inc dl
+    inc dl
+    mov [apple_y], dl
+
+    jmp .game_loop
+
+.game_over:
+    call clear_screen
+    mov si, snake_over_msg
+    call print_string
+    xor ax, ax
+    int 0x16
+
+.exit_game:
+    mov ah, 0x01
+    mov cx, 0x0607
+    int 0x10
+    call clear_screen
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 ; время
 do_time:
@@ -265,28 +596,22 @@ do_neofetch:
     push si
     push ax
 
-    ; Логотип (упрощенный)
     mov si, neo_logo
     call print_string
 
-    ; ос
     mov si, neo_os
     call print_string
 
-    ; ядро
     mov si, neo_kernel
     call print_string
 
-    ; архитектура
     mov si, neo_arch
     call print_string
 
-    ; время
     mov si, neo_time_label
     call print_string
-    call do_time   ; выводит время
+    call do_time
 
-    ; память (через int 0x12 – размер в КБ)
     int 0x12
     mov si, neo_mem_label
     call print_string
@@ -294,7 +619,6 @@ do_neofetch:
     mov si, neo_mem_unit
     call print_string
 
-    ; BIOS (проверяем)
     mov si, neo_bios_label
     call print_string
     mov si, neo_bios_ok
@@ -306,7 +630,6 @@ do_neofetch:
     pop si
     ret
 
-; вывод числа из AX (десятичное)
 print_number_ax:
     push ax
     push bx
@@ -317,8 +640,25 @@ print_number_ax:
     cmp ax, 0
     jne .convert
     mov al, '0'
-    mov ah, 0x0e
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ah, 0x09
+    mov bh, 0
+    mov bl, 0x0F
+    mov cx, 1
     int 0x10
+    mov ah, 0x03
+    mov bh, 0
+    int 0x10
+    inc dl
+    mov ah, 0x02
+    int 0x10
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     jmp .done
 .convert:
     xor dx, dx
@@ -331,8 +671,25 @@ print_number_ax:
     pop dx
     add dl, '0'
     mov al, dl
-    mov ah, 0x0e
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ah, 0x09
+    mov bh, 0
+    mov bl, 0x0F
+    mov cx, 1
     int 0x10
+    mov ah, 0x03
+    mov bh, 0
+    int 0x10
+    inc dl
+    mov ah, 0x02
+    int 0x10
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     loop .print
 .done:
     pop dx
@@ -341,7 +698,6 @@ print_number_ax:
     pop ax
     ret
 
-; калькулятор
 do_calc:
     push ax
     push bx
@@ -355,12 +711,9 @@ do_calc:
     call read_line
 
     mov si, input_buffer
-
-    ; Парсим первое число
     call parse_number
-    push ax          ; сохраняем первое число
+    push ax
 
-    ; Ищем оператор
 .skip_op:
     lodsb
     cmp al, '+'
@@ -430,7 +783,6 @@ do_calc:
     pop ax
     ret
 
-; парсинг числа (возвращает AX)
 parse_number:
     push bx
     push cx
@@ -465,7 +817,7 @@ parse_number:
 
 ; данные
 
-banner          db 'microDOS v0.3 - 16-bit OS', 0x0d, 0x0a
+banner          db 'microDOS v0.4 - 16-bit OS', 0x0d, 0x0a
                 db 'help for commands', 0x0d, 0x0a, 0
 prompt          db '> ', 0
 unknown_msg     db 'unknown command', 0x0d, 0x0a, 0
@@ -476,20 +828,20 @@ help_msg        db 'commands:', 0x0d, 0x0a
                 db '  info      - system information', 0x0d, 0x0a
                 db '  neofetch  - pretty system info', 0x0d, 0x0a
                 db '  calc      - calculator (e.g., 5+3)', 0x0d, 0x0a
+                db '  snake     - play snake game', 0x0d, 0x0a
                 db '  reboot    - restart computer', 0x0d, 0x0a, 0
 time_msg        db 'time: ', 0
 colon           db ':', 0
 reboot_msg      db 'reboot...', 0x0d, 0x0a, 0
-info_msg        db 'microDOS v3.0', 0x0d, 0x0a
+info_msg        db 'microDOS v0.4', 0x0d, 0x0a
                 db '16-bit, Real mode', 0x0d, 0x0a
                 db 'written in NASM', 0x0d, 0x0a, 0
 crlf            db 0x0d, 0x0a, 0
 
-; неофетч (типо) функции
 neo_logo        db 0x0d, 0x0a
                 db '          microDOS            ', 0x0d, 0x0a
                 db '       16-bit rezhim       ', 0x0d, 0x0a, 0
-neo_os          db 'OS:           microDOS 0.3', 0x0d, 0x0a, 0
+neo_os          db 'OS:           microDOS 0.4', 0x0d, 0x0a, 0
 neo_kernel      db 'Kernel:       16-bit x86', 0x0d, 0x0a, 0
 neo_arch        db 'Architecture: 8086/80286', 0x0d, 0x0a, 0
 neo_time_label  db 'Time:         ', 0
@@ -498,13 +850,19 @@ neo_mem_unit    db ' KB', 0x0d, 0x0a, 0
 neo_bios_label  db 'BIOS:         ', 0
 neo_bios_ok     db 'IBM PC/AT compatible', 0x0d, 0x0a, 0
 
-; калькулятор функции
 calc_prompt     db 'Calc: ', 0
 calc_result     db '= ', 0
 calc_error      db 'Error!', 0x0d, 0x0a, 0
 calc_divzero    db 'Division by zero!', 0x0d, 0x0a, 0
 
-; команды (имена)
+snake_over_msg  db 'Game Over! Press any key...', 0x0d, 0x0a, 0
+snake_len       db 3
+snake_dir       db 1
+apple_x         db 20
+apple_y         db 8
+snake_x         times 64 db 0
+snake_y         times 64 db 0
+
 cmd_help        db 'help', 0
 cmd_time        db 'time', 0
 cmd_clear       db 'clear', 0
@@ -512,7 +870,7 @@ cmd_info        db 'info', 0
 cmd_reboot      db 'reboot', 0
 cmd_neofetch    db 'neofetch', 0
 cmd_calc        db 'calc', 0
+cmd_snake       db 'snake', 0
 
-; буферы
 input_buffer    times 64 db 0
 num_buffer      times 16 db 0
