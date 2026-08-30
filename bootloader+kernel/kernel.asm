@@ -2,11 +2,14 @@
 [bits 16]
 
 start:
+    cli                 ; Отключаем прерывания при настройке сегментов и стека
+    cld                 ; Сбрасываем флаг направления (DF=0, движение вперед)
     mov ax, 0x1000
     mov ds, ax
     mov es, ax
     mov ss, ax
     mov sp, 0xFF00
+    sti                 ; Включаем прерывания обратно
 
     call clear_screen
 
@@ -60,7 +63,7 @@ read_line:
     cmp al, 0x08
     je .backspace
     cmp cl, 63
-    je .loop
+    jae .loop
     stosb
     inc cx
     mov ah, 0x0e
@@ -71,6 +74,7 @@ read_line:
     je .loop
     dec cx
     dec di
+    mov byte [di], 0
     mov ah, 0x0e
     mov al, 0x08
     int 0x10
@@ -93,16 +97,16 @@ strcmp:
     push di
     push ax
 .loop:
-    lodsb
-    or al, al
-    jz .check
-    cmp al, [di]
+    mov al, [si]
+    mov ah, [di]
+    cmp al, ah
     jne .no
+    test al, al
+    jz .match
+    inc si
     inc di
     jmp .loop
-.check:
-    cmp byte [di], 0
-    jne .no
+.match:
     stc
     jmp .done
 .no:
@@ -121,8 +125,10 @@ print_hex:
     call print_nibble
     pop cx
     pop ax
+    push ax
     and al, 0x0f
     call print_nibble
+    pop ax
     ret
 
 print_nibble:
@@ -142,44 +148,51 @@ shell:
     call print_string
     call read_line
 
-    mov si, input_buffer
-
     ; help
+    mov si, input_buffer
     mov di, cmd_help
     call strcmp
     jc .help
 
     ; time
+    mov si, input_buffer
     mov di, cmd_time
     call strcmp
     jc .time
 
     ; clear
+    mov si, input_buffer
     mov di, cmd_clear
     call strcmp
     jc .clear
 
     ; info
+    mov si, input_buffer
     mov di, cmd_info
     call strcmp
     jc .info
 
     ; reboot
+    mov si, input_buffer
     mov di, cmd_reboot
     call strcmp
     jc .reboot
 
     ; neofetch
+    mov si, input_buffer
     mov di, cmd_neofetch
     call strcmp
     jc .neofetch
 
     ; calc
+    mov si, input_buffer
     mov di, cmd_calc
     call strcmp
     jc .calc
 
     ; unknown
+    cmp byte [input_buffer], 0
+    je shell
     mov si, unknown_msg
     call print_string
     jmp shell
@@ -220,6 +233,7 @@ shell:
 do_time:
     push ax
     push cx
+    push dx
     push si
     mov ah, 0x02
     int 0x1a
@@ -233,6 +247,7 @@ do_time:
     call print_hex
     call newline
     pop si
+    pop dx
     pop cx
     pop ax
     ret
@@ -278,7 +293,6 @@ do_neofetch:
     call print_number_ax
     mov si, neo_mem_unit
     call print_string
-    call newline
 
     ; BIOS (проверяем)
     mov si, neo_bios_label
@@ -298,16 +312,14 @@ print_number_ax:
     push bx
     push cx
     push dx
-    push di
-    mov di, num_buffer
     mov bx, 10
     xor cx, cx
     cmp ax, 0
     jne .convert
     mov al, '0'
-    stosb
-    inc cx
-    jmp .print
+    mov ah, 0x0e
+    int 0x10
+    jmp .done
 .convert:
     xor dx, dx
     div bx
@@ -322,7 +334,7 @@ print_number_ax:
     mov ah, 0x0e
     int 0x10
     loop .print
-    pop di
+.done:
     pop dx
     pop cx
     pop bx
@@ -393,6 +405,7 @@ do_calc:
     jmp .print_result
 
 .div_zero:
+    pop ax
     mov si, calc_divzero
     call print_string
     jmp .done
@@ -405,6 +418,7 @@ do_calc:
     jmp .done
 
 .error:
+    pop ax
     mov si, calc_error
     call print_string
 .done:
@@ -420,9 +434,13 @@ do_calc:
 parse_number:
     push bx
     push cx
-    xor ax, ax
     xor cx, cx
-    xor bx, bx
+.skip_spaces:
+    mov al, [si]
+    cmp al, ' '
+    jne .loop
+    inc si
+    jmp .skip_spaces
 .loop:
     lodsb
     cmp al, '0'
@@ -430,6 +448,7 @@ parse_number:
     cmp al, '9'
     ja .done
     sub al, '0'
+    xor ah, ah
     mov bx, ax
     mov ax, cx
     mov cx, 10
@@ -477,7 +496,7 @@ neo_time_label  db 'Time:         ', 0
 neo_mem_label   db 'Memory:       ', 0
 neo_mem_unit    db ' KB', 0x0d, 0x0a, 0
 neo_bios_label  db 'BIOS:         ', 0
-neo_bios_ok     db 'IBM PC/AT compatible', 0
+neo_bios_ok     db 'IBM PC/AT compatible', 0x0d, 0x0a, 0
 
 ; калькулятор функции
 calc_prompt     db 'Calc: ', 0
