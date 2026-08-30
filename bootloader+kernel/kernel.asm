@@ -221,7 +221,7 @@ do_time:
     push ax
     push cx
     push si
-    mov ah, 0x00
+    mov ah, 0x02
     int 0x1a
     mov si, time_msg
     call print_string
@@ -349,7 +349,6 @@ do_calc:
     push ax          ; сохраняем первое число
 
     ; Ищем оператор
-    mov si, input_buffer
 .skip_op:
     lodsb
     cmp al, '+'
@@ -388,6 +387,7 @@ do_calc:
     pop bx
     cmp ax, 0
     je .div_zero
+    xchg ax, bx
     xor dx, dx
     div bx
     jmp .print_result
@@ -418,7 +418,6 @@ do_calc:
 
 ; парсинг числа (возвращает AX)
 parse_number:
-    push si
     push bx
     push cx
     xor ax, ax
@@ -439,10 +438,10 @@ parse_number:
     mov cx, ax
     jmp .loop
 .done:
+    dec si
     mov ax, cx
     pop cx
     pop bx
-    pop si
     ret
 
 ; данные
@@ -470,7 +469,7 @@ crlf            db 0x0d, 0x0a, 0
 ; неофетч (типо) функции
 neo_logo        db 0x0d, 0x0a
                 db '          microDOS            ', 0x0d, 0x0a
-                db '       16-bit rezhim       ', 0x0d, 0x0a
+                db '       16-bit rezhim       ', 0x0d, 0x0a, 0
 neo_os          db 'OS:           microDOS 0.3', 0x0d, 0x0a, 0
 neo_kernel      db 'Kernel:       16-bit x86', 0x0d, 0x0a, 0
 neo_arch        db 'Architecture: 8086/80286', 0x0d, 0x0a, 0
