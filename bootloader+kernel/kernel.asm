@@ -11,14 +11,113 @@ start:
     mov sp, 0xFF00
     sti
 
+    call set_theme_black
     call clear_screen
-    call auto_theme          ; автоматически выбираем тему по времени
+    call boot_menu
+
+; =============================================
+; BOOT MENU
+; =============================================
+
+boot_menu:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov byte [menu_selected], 0
+
+.menu_loop:
+    call clear_screen
+    call menu_draw
+
+    xor ax, ax
+    int 0x16
+
+    cmp al, 27
+    je .go_visual
+    cmp ah, 0x48
+    je .up
+    cmp ah, 0x50
+    je .down
+    cmp al, 0x0d
+    je .select
+    jmp .menu_loop
+
+.up:
+    cmp byte [menu_selected], 0
+    je .menu_loop
+    dec byte [menu_selected]
+    jmp .menu_loop
+
+.down:
+    cmp byte [menu_selected], 1
+    je .menu_loop
+    inc byte [menu_selected]
+    jmp .menu_loop
+
+.select:
+    cmp byte [menu_selected], 0
+    je .go_visual
+    call clear_screen
     mov si, banner
     call print_string
     call shell
+    jmp .menu_loop
+
+.go_visual:
+    call do_visual16
+    jmp .menu_loop
+
+.exit:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+menu_draw:
+    push si
+    call clear_screen
+
+    mov si, menu_top
+    call print_string
+    mov si, menu_title
+    call print_string
+    mov si, menu_sep
+    call print_string
+
+    cmp byte [menu_selected], 0
+    jne .item1_normal
+    mov si, menu_item1_sel
+    call print_string
+    jmp .item2
+.item1_normal:
+    mov si, menu_item1
+    call print_string
+
+.item2:
+    cmp byte [menu_selected], 1
+    jne .item2_normal
+    mov si, menu_item2_sel
+    call print_string
+    jmp .done
+.item2_normal:
+    mov si, menu_item2
+    call print_string
+
+.done:
+    mov si, menu_bot
+    call print_string
+    mov si, menu_hint
+    call print_string
+    pop si
+    ret
 
 ; =============================================
-; ПЕРЕМЕННЫЕ ТЕМЫ
+; THEME VARIABLES
 ; =============================================
 
 theme_color db 0x0F
@@ -35,61 +134,7 @@ set_theme_black:
     ret
 
 ; =============================================
-; АВТОМАТИЧЕСКАЯ ТЕМА (по времени)
-; =============================================
-
-auto_theme:
-    push ax
-    push cx
-    push si
-
-    ; Получаем время (AH=0x02, CH=часы BCD, CL=минуты BCD)
-    mov ah, 0x02
-    int 0x1a
-
-    ; Конвертируем BCD часы в обычное число
-    mov al, ch
-    call bcd_to_bin
-    mov ch, al          ; CH = часы (0-23)
-
-    ; Если часы >= 6 и < 18 → белая тема, иначе чёрная
-    cmp ch, 6
-    jb .night
-    cmp ch, 18
-    jb .day
-
-.night:
-    call set_theme_black
-    mov si, auto_black_msg
-    call print_string
-    jmp .done
-
-.day:
-    call set_theme_white
-    mov si, auto_white_msg
-    call print_string
-
-.done:
-    pop si
-    pop cx
-    pop ax
-    ret
-
-; Конвертация BCD в двоичное число (AL = BCD, возвращает AX)
-bcd_to_bin:
-    push bx
-    mov bl, al
-    and al, 0x0F          ; единицы
-    mov bh, bl
-    shr bh, 4             ; десятки
-    mov bl, 10
-    mul bl                ; AL = десятки * 10
-    add al, bh            ; AL = десятки*10 + единицы
-    pop bx
-    ret
-
-; =============================================
-; БАЗОВЫЕ ФУНКЦИИ
+; CORE FUNCTIONS
 ; =============================================
 
 print_string:
@@ -160,7 +205,6 @@ print_string:
     pop ax
     ret
 
-; Печать с заданным атрибутом
 print_attr:
     push ax
     push bx
@@ -456,7 +500,7 @@ print_number_ax:
     ret
 
 ; =============================================
-; КОМАНДНАЯ ОБОЛОЧКА
+; COMMAND SHELL (TEXT MODE)
 ; =============================================
 
 shell:
@@ -504,6 +548,10 @@ shell:
     call strcmp
     jc .snake
 
+    mov di, cmd_visual16
+    call strcmp
+    jc .visual16
+
     mov si, unknown_msg
     call print_string
     jmp shell
@@ -546,8 +594,15 @@ shell:
     call do_snake
     jmp shell
 
+.visual16:
+    call do_visual16
+    call clear_screen
+    mov si, banner
+    call print_string
+    jmp shell
+
 ; =============================================
-; РЕАЛИЗАЦИЯ КОМАНД
+; COMMAND IMPLEMENTATIONS
 ; =============================================
 
 do_time:
@@ -565,7 +620,34 @@ do_time:
     call print_string
     mov al, cl
     call print_hex
+    mov si, colon
+    call print_string
+    mov al, dh
+    call print_hex
     call newline
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+do_time_real:
+    push ax
+    push cx
+    push dx
+    push si
+    mov ah, 0x02
+    int 0x1a
+    mov al, ch
+    call print_hex
+    mov si, colon
+    call print_string
+    mov al, cl
+    call print_hex
+    mov si, colon
+    call print_string
+    mov al, dh
+    call print_hex
     pop si
     pop dx
     pop cx
@@ -579,10 +661,6 @@ do_info:
     pop si
     ret
 
-; =============================================
-; NEOFETCH
-; =============================================
-
 do_neofetch:
     push si
     push ax
@@ -592,28 +670,22 @@ do_neofetch:
     cmp bl, 0x0F
     je .dark
 
-    ; ===== БЕЛАЯ ТЕМА =====
     mov bl, 0x7A
     mov si, neo_logo
     call print_attr
-
     mov bl, 0x7B
     mov si, neo_os
     call print_attr
-
     mov bl, 0x7D
     mov si, neo_kernel
     call print_attr
-
     mov bl, 0x79
     mov si, neo_arch
     call print_attr
-
     mov bl, 0x7B
     mov si, neo_time_label
     call print_attr
     call do_time
-
     mov bl, 0x7D
     mov si, neo_mem_label
     call print_attr
@@ -621,38 +693,30 @@ do_neofetch:
     call print_number_ax
     mov si, neo_mem_unit
     call print_string
-
     mov bl, 0x7A
     mov si, neo_bios_label
     call print_attr
     mov si, neo_bios_ok
     call print_string
-
     jmp .done
 
 .dark:
-    ; ===== ЧЁРНАЯ ТЕМА =====
     mov bl, 0x0B
     mov si, neo_logo
     call print_attr
-
     mov bl, 0x0E
     mov si, neo_os
     call print_attr
-
     mov bl, 0x0C
     mov si, neo_kernel
     call print_attr
-
     mov bl, 0x0A
     mov si, neo_arch
     call print_attr
-
     mov bl, 0x09
     mov si, neo_time_label
     call print_attr
     call do_time
-
     mov bl, 0x0D
     mov si, neo_mem_label
     call print_attr
@@ -660,7 +724,6 @@ do_neofetch:
     call print_number_ax
     mov si, neo_mem_unit
     call print_string
-
     mov bl, 0x07
     mov si, neo_bios_label
     call print_attr
@@ -670,15 +733,10 @@ do_neofetch:
 .done:
     call newline
     call newline
-
     pop bx
     pop ax
     pop si
     ret
-
-; =============================================
-; КАЛЬКУЛЯТОР
-; =============================================
 
 do_calc:
     push ax
@@ -715,20 +773,17 @@ do_calc:
     pop bx
     add ax, bx
     jmp .print_result
-
 .sub:
     call parse_number
     pop bx
     sub bx, ax
     mov ax, bx
     jmp .print_result
-
 .mul:
     call parse_number
     pop bx
     mul bx
     jmp .print_result
-
 .div:
     call parse_number
     pop bx
@@ -738,20 +793,17 @@ do_calc:
     xor dx, dx
     div bx
     jmp .print_result
-
 .div_zero:
     pop ax
     mov si, calc_divzero
     call print_string
     jmp .done
-
 .print_result:
     mov si, calc_result
     call print_string
     call print_number_ax
     call newline
     jmp .done
-
 .error:
     pop ax
     mov si, calc_error
@@ -797,10 +849,6 @@ parse_number:
     pop bx
     ret
 
-; =============================================
-; ТЕМА
-; =============================================
-
 do_theme:
     push si
     push di
@@ -819,15 +867,12 @@ do_theme:
 .check:
     cmp byte [si], 0
     je .show_help
-
     mov di, theme_white
     call strcmp
     jc .set_white
-
     mov di, theme_black
     call strcmp
     jc .set_black
-
     mov si, theme_unknown
     call print_string
     jmp .done
@@ -860,7 +905,7 @@ do_theme:
     ret
 
 ; =============================================
-; ЗМЕЙКА
+; SNAKE GAME
 ; =============================================
 
 do_snake:
@@ -1163,10 +1208,577 @@ spawn_apple:
     ret
 
 ; =============================================
-; ДАННЫЕ
+; VISUAL16 v0.6
 ; =============================================
 
-banner          db 'microDOS v0.5 - 16-bit OS', 0x0d, 0x0a
+do_visual16:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov byte [v16_selected], 0
+
+.visual_loop:
+    call v16_draw_screen
+    call v16_wait_key
+
+    cmp al, 27
+    je .exit
+    cmp ah, 0x48
+    je .up
+    cmp ah, 0x50
+    je .down
+    cmp al, 0x0d
+    je .select
+    jmp .visual_loop
+
+.up:
+    cmp byte [v16_selected], 0
+    je .visual_loop
+    dec byte [v16_selected]
+    jmp .visual_loop
+
+.down:
+    cmp byte [v16_selected], 7
+    je .visual_loop
+    inc byte [v16_selected]
+    jmp .visual_loop
+
+.select:
+    cmp byte [v16_selected], 0
+    je .app_clock
+    cmp byte [v16_selected], 1
+    je .app_hello
+    cmp byte [v16_selected], 2
+    je .app_info
+    cmp byte [v16_selected], 3
+    je .app_calc
+    cmp byte [v16_selected], 4
+    je .app_snake
+    cmp byte [v16_selected], 5
+    je .app_neofetch
+    cmp byte [v16_selected], 6
+    je .app_time
+    cmp byte [v16_selected], 7
+    je .exit
+    jmp .visual_loop
+
+.app_clock:
+    call v16_show_clock
+    jmp .visual_loop
+.app_hello:
+    call v16_show_hello
+    jmp .visual_loop
+.app_info:
+    call v16_show_info
+    jmp .visual_loop
+.app_calc:
+    call v16_show_calc
+    jmp .visual_loop
+.app_snake:
+    call v16_show_snake
+    jmp .visual_loop
+.app_neofetch:
+    call v16_show_neofetch
+    jmp .visual_loop
+.app_time:
+    call v16_show_time
+    jmp .visual_loop
+
+.exit:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+v16_draw_screen:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    call clear_screen
+
+    mov si, v16_top
+    call print_string
+    mov si, v16_title_line
+    call print_string
+    mov si, v16_sep
+    call print_string
+
+    cmp byte [v16_selected], 0
+    jne .i1n
+    mov si, v16_item1_sel
+    call print_string
+    jmp .i2
+.i1n:
+    mov si, v16_item1
+    call print_string
+
+.i2:
+    cmp byte [v16_selected], 1
+    jne .i2n
+    mov si, v16_item2_sel
+    call print_string
+    jmp .i3
+.i2n:
+    mov si, v16_item2
+    call print_string
+
+.i3:
+    cmp byte [v16_selected], 2
+    jne .i3n
+    mov si, v16_item3_sel
+    call print_string
+    jmp .i4
+.i3n:
+    mov si, v16_item3
+    call print_string
+
+.i4:
+    cmp byte [v16_selected], 3
+    jne .i4n
+    mov si, v16_item4_sel
+    call print_string
+    jmp .i5
+.i4n:
+    mov si, v16_item4
+    call print_string
+
+.i5:
+    cmp byte [v16_selected], 4
+    jne .i5n
+    mov si, v16_item5_sel
+    call print_string
+    jmp .i6
+.i5n:
+    mov si, v16_item5
+    call print_string
+
+.i6:
+    cmp byte [v16_selected], 5
+    jne .i6n
+    mov si, v16_item6_sel
+    call print_string
+    jmp .i7
+.i6n:
+    mov si, v16_item6
+    call print_string
+
+.i7:
+    cmp byte [v16_selected], 6
+    jne .i7n
+    mov si, v16_item7_sel
+    call print_string
+    jmp .i8
+.i7n:
+    mov si, v16_item7
+    call print_string
+
+.i8:
+    cmp byte [v16_selected], 7
+    jne .i8n
+    mov si, v16_item8_sel
+    call print_string
+    jmp .bot
+.i8n:
+    mov si, v16_item8
+    call print_string
+
+.bot:
+    mov si, v16_bot
+    call print_string
+    mov si, v16_hint
+    call print_string
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+v16_wait_key:
+    xor ax, ax
+    int 0x16
+    ret
+
+; =============================================
+; V16 APPS
+; =============================================
+
+v16_show_clock:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+.clock_loop:
+    call clear_screen
+    mov si, v16_clock_top
+    call print_string
+    mov si, v16_clock_title
+    call print_string
+    mov si, v16_clock_sep
+    call print_string
+    mov si, v16_clock_empty
+    call print_string
+    mov si, v16_clock_label
+    call print_string
+    call do_time_real
+    mov si, v16_clock_pad
+    call print_string
+    mov si, v16_clock_empty
+    call print_string
+    mov si, v16_clock_hint
+    call print_string
+    mov si, v16_clock_bot
+    call print_string
+
+    mov cx, 0x000F
+    mov dx, 0x4240
+    mov ah, 0x86
+    int 0x15
+
+    mov ah, 0x01
+    int 0x16
+    jz .clock_loop
+    xor ax, ax
+    int 0x16
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+v16_show_hello:
+    push si
+    call clear_screen
+    mov si, v16_hello_screen
+    call print_string
+    xor ax, ax
+    int 0x16
+    pop si
+    ret
+
+v16_show_info:
+    push si
+    call clear_screen
+    mov si, v16_info_screen
+    call print_string
+    xor ax, ax
+    int 0x16
+    pop si
+    ret
+
+v16_show_calc:
+    push si
+    call clear_screen
+    mov si, v16_calc_screen
+    call print_string
+    call do_calc
+    xor ax, ax
+    int 0x16
+    pop si
+    ret
+
+v16_show_snake:
+    call do_snake
+    ret
+
+v16_show_neofetch:
+    push si
+    call clear_screen
+    mov si, v16_neofetch_screen
+    call print_string
+    call do_neofetch
+    mov si, v16_press_key
+    call print_string
+    xor ax, ax
+    int 0x16
+    pop si
+    ret
+
+v16_show_time:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+.time_loop:
+    call clear_screen
+    mov si, v16_time_top
+    call print_string
+    mov si, v16_time_title
+    call print_string
+    mov si, v16_time_sep
+    call print_string
+    mov si, v16_timeapp_empty
+    call print_string
+    mov si, v16_timeapp_label
+    call print_string
+    call do_time_real
+    mov si, v16_timeapp_pad
+    call print_string
+    mov si, v16_timeapp_empty
+    call print_string
+    mov si, v16_time_hint
+    call print_string
+    mov si, v16_time_bot
+    call print_string
+
+    mov cx, 0x000F
+    mov dx, 0x4240
+    mov ah, 0x86
+    int 0x15
+
+    mov ah, 0x01
+    int 0x16
+    jz .time_loop
+    xor ax, ax
+    int 0x16
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; =============================================
+; MENU DATA
+; =============================================
+
+menu_selected db 0
+
+menu_top:
+db 0x0d, 0x0a
+db 0xC9
+times 60 db 0xCD
+db 0xBB, 0x0d, 0x0a, 0
+
+menu_title:
+db 0xBA, '                    microDOS v0.6 Boot Menu                 ', 0xBA, 0x0d, 0x0a, 0
+
+menu_sep:
+db 0xCC
+times 60 db 0xCD
+db 0xB9, 0x0d, 0x0a, 0
+
+menu_item1:
+db 0xBA, '    [ 1 ]  Visual16 (All Apps)                              ', 0xBA, 0x0d, 0x0a, 0
+menu_item1_sel:
+db 0xBA, ' >> [ 1 ]  Visual16 (All Apps)                              ', 0xBA, 0x0d, 0x0a, 0
+
+menu_item2:
+db 0xBA, '    [ 2 ]  Text Mode (Command Shell)                        ', 0xBA, 0x0d, 0x0a, 0
+menu_item2_sel:
+db 0xBA, ' >> [ 2 ]  Text Mode (Command Shell)                        ', 0xBA, 0x0d, 0x0a, 0
+
+menu_bot:
+db 0xC8
+times 60 db 0xCD
+db 0xBC, 0x0d, 0x0a, 0
+
+menu_hint:
+db 0x0d, 0x0a
+db '  Use UP/DOWN arrows, ENTER to select', 0x0d, 0x0a, 0
+
+; =============================================
+; VISUAL16 DATA
+; =============================================
+
+v16_selected db 0
+
+v16_top:
+db 0x0d, 0x0a
+db 0xC9
+times 60 db 0xCD
+db 0xBB, 0x0d, 0x0a, 0
+
+v16_title_line:
+db 0xBA, '                    microDOS Visual16 v0.6                  ', 0xBA, 0x0d, 0x0a, 0
+
+v16_sep:
+db 0xCC
+times 60 db 0xCD
+db 0xB9, 0x0d, 0x0a, 0
+
+v16_item1:
+db 0xBA, '    [ 1 ]  Clock                                             ', 0xBA, 0x0d, 0x0a, 0
+v16_item1_sel:
+db 0xBA, ' >> [ 1 ]  Clock                                             ', 0xBA, 0x0d, 0x0a, 0
+
+v16_item2:
+db 0xBA, '    [ 2 ]  Hello                                             ', 0xBA, 0x0d, 0x0a, 0
+v16_item2_sel:
+db 0xBA, ' >> [ 2 ]  Hello                                             ', 0xBA, 0x0d, 0x0a, 0
+
+v16_item3:
+db 0xBA, '    [ 3 ]  Info                                              ', 0xBA, 0x0d, 0x0a, 0
+v16_item3_sel:
+db 0xBA, ' >> [ 3 ]  Info                                              ', 0xBA, 0x0d, 0x0a, 0
+
+v16_item4:
+db 0xBA, '    [ 4 ]  Calc                                              ', 0xBA, 0x0d, 0x0a, 0
+v16_item4_sel:
+db 0xBA, ' >> [ 4 ]  Calc                                              ', 0xBA, 0x0d, 0x0a, 0
+
+v16_item5:
+db 0xBA, '    [ 5 ]  Snake                                             ', 0xBA, 0x0d, 0x0a, 0
+v16_item5_sel:
+db 0xBA, ' >> [ 5 ]  Snake                                             ', 0xBA, 0x0d, 0x0a, 0
+
+v16_item6:
+db 0xBA, '    [ 6 ]  Neofetch                                          ', 0xBA, 0x0d, 0x0a, 0
+v16_item6_sel:
+db 0xBA, ' >> [ 6 ]  Neofetch                                          ', 0xBA, 0x0d, 0x0a, 0
+
+v16_item7:
+db 0xBA, '    [ 7 ]  Time                                              ', 0xBA, 0x0d, 0x0a, 0
+v16_item7_sel:
+db 0xBA, ' >> [ 7 ]  Time                                              ', 0xBA, 0x0d, 0x0a, 0
+
+v16_item8:
+db 0xBA, '    [ 8 ]  Exit to Text Mode                                 ', 0xBA, 0x0d, 0x0a, 0
+v16_item8_sel:
+db 0xBA, ' >> [ 8 ]  Exit to Text Mode                                 ', 0xBA, 0x0d, 0x0a, 0
+
+v16_bot:
+db 0xC8
+times 60 db 0xCD
+db 0xBC, 0x0d, 0x0a, 0
+
+v16_hint:
+db 0x0d, 0x0a
+db '  UP/DOWN - select, ENTER - open, ESC - exit to text', 0x0d, 0x0a, 0
+
+; Clock (unique labels)
+v16_clock_top:
+db 0xC9
+times 60 db 0xCD
+db 0xBB, 0x0d, 0x0a, 0
+v16_clock_title:
+db 0xBA, '                       CLOCK APP                             ', 0xBA, 0x0d, 0x0a, 0
+v16_clock_sep:
+db 0xCC
+times 60 db 0xCD
+db 0xB9, 0x0d, 0x0a, 0
+v16_clock_empty:
+db 0xBA, '                                                             ', 0xBA, 0x0d, 0x0a, 0
+v16_clock_label:
+db 0xBA, '                       Time: ', 0
+v16_clock_pad:
+db '                        ', 0xBA, 0x0d, 0x0a, 0
+v16_clock_hint:
+db 0xBA, '                                                             ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                  Press any key to return...                 ', 0xBA, 0x0d, 0x0a, 0
+v16_clock_bot:
+db 0xC8
+times 60 db 0xCD
+db 0xBC, 0x0d, 0x0a, 0
+
+; Hello
+v16_hello_screen:
+db 0xC9
+times 60 db 0xCD
+db 0xBB, 0x0d, 0x0a
+db 0xBA, '                       HELLO APP                             ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                                                             ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                 Welcome to microDOS!                        ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                                                             ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                  Press any key to return...                 ', 0xBA, 0x0d, 0x0a
+db 0xC8
+times 60 db 0xCD
+db 0xBC, 0x0d, 0x0a, 0
+
+; Info
+v16_info_screen:
+db 0xC9
+times 60 db 0xCD
+db 0xBB, 0x0d, 0x0a
+db 0xBA, '                      SYSTEM INFO                            ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                                                             ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                     microDOS v0.6                            ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                     16-bit Real Mode                        ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                                                             ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                  Press any key to return...                 ', 0xBA, 0x0d, 0x0a
+db 0xC8
+times 60 db 0xCD
+db 0xBC, 0x0d, 0x0a, 0
+
+; Calc
+v16_calc_screen:
+db 0xC9
+times 60 db 0xCD
+db 0xBB, 0x0d, 0x0a
+db 0xBA, '                    CALCULATOR APP                           ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                                                             ', 0xBA, 0x0d, 0x0a
+db 0xC8
+times 60 db 0xCD
+db 0xBC, 0x0d, 0x0a, 0
+
+; Time (unique labels: v16_timeapp_*)
+v16_time_top:
+db 0xC9
+times 60 db 0xCD
+db 0xBB, 0x0d, 0x0a, 0
+v16_time_title:
+db 0xBA, '                       TIME APP                              ', 0xBA, 0x0d, 0x0a, 0
+v16_time_sep:
+db 0xCC
+times 60 db 0xCD
+db 0xB9, 0x0d, 0x0a, 0
+v16_timeapp_empty:
+db 0xBA, '                                                             ', 0xBA, 0x0d, 0x0a, 0
+v16_timeapp_label:
+db 0xBA, '                       Time: ', 0
+v16_timeapp_pad:
+db '                        ', 0xBA, 0x0d, 0x0a, 0
+v16_time_hint:
+db 0xBA, '                                                             ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                  Press any key to return...                 ', 0xBA, 0x0d, 0x0a, 0
+v16_time_bot:
+db 0xC8
+times 60 db 0xCD
+db 0xBC, 0x0d, 0x0a, 0
+
+; Neofetch
+v16_neofetch_screen:
+db 0xC9
+times 60 db 0xCD
+db 0xBB, 0x0d, 0x0a
+db 0xBA, '                    NEOFETCH APP                             ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                                                             ', 0xBA, 0x0d, 0x0a
+db 0xC8
+times 60 db 0xCD
+db 0xBC, 0x0d, 0x0a, 0
+
+v16_press_key:
+db 0x0d, 0x0a, 'Press any key to return...', 0
+
+; =============================================
+; MAIN DATA
+; =============================================
+
+banner          db 'microDOS v0.6 - 16-bit OS', 0x0d, 0x0a
                 db 'help for commands', 0x0d, 0x0a, 0
 prompt          db '> ', 0
 unknown_msg     db 'unknown command', 0x0d, 0x0a, 0
@@ -1178,21 +1790,17 @@ help_msg        db 'commands:', 0x0d, 0x0a
                 db '  neofetch  - pretty system info', 0x0d, 0x0a
                 db '  calc      - calculator (e.g., 5+3)', 0x0d, 0x0a
                 db '  snake     - play snake game', 0x0d, 0x0a
-                db '  theme white/black  - change theme (auto by time)', 0x0d, 0x0a
+                db '  visual16  - enter Visual16 shell', 0x0d, 0x0a
+                db '  theme white/black - change theme', 0x0d, 0x0a
                 db '  reboot    - restart computer', 0x0d, 0x0a, 0
 time_msg        db 'time: ', 0
 colon           db ':', 0
 reboot_msg      db 'reboot...', 0x0d, 0x0a, 0
-info_msg        db 'microDOS v0.5', 0x0d, 0x0a
+info_msg        db 'microDOS v0.6', 0x0d, 0x0a
                 db '16-bit, Real mode', 0x0d, 0x0a
                 db 'written in NASM', 0x0d, 0x0a, 0
 crlf            db 0x0d, 0x0a, 0
 
-; Автотема сообщения
-auto_white_msg  db 'Auto theme: WHITE (Day mode)', 0x0d, 0x0a, 0
-auto_black_msg  db 'Auto theme: BLACK (Night mode)', 0x0d, 0x0a, 0
-
-; neofetch
 neo_logo        db 0x0d, 0x0a
                 db '_      _  ____ ____  ____  ____  ____  ____ ', 0x0d, 0x0a
                 db '/ \__/|/ \/   _Y  __\/  _ \/  _ \/  _ \/ ___\\', 0x0d, 0x0a
@@ -1200,7 +1808,7 @@ neo_logo        db 0x0d, 0x0a
                 db '| |  ||| ||  \_|    /| \_/|| |_/|| \_/|\___ |', 0x0d, 0x0a
                 db '\_/  \|\_/\____|_/\_\\____/\____/\____/\____/', 0x0d, 0x0a
                 db 0
-neo_os          db 'OS:           microDOS 0.5', 0x0d, 0x0a, 0
+neo_os          db 'OS:           microDOS 0.6', 0x0d, 0x0a, 0
 neo_kernel      db 'Kernel:       16-bit x86', 0x0d, 0x0a, 0
 neo_arch        db 'Architecture: 8086/80286', 0x0d, 0x0a, 0
 neo_time_label  db 'Time:         ', 0
@@ -1209,21 +1817,18 @@ neo_mem_unit    db ' KB', 0x0d, 0x0a, 0
 neo_bios_label  db 'BIOS:         ', 0
 neo_bios_ok     db 'IBM PC/AT compatible', 0x0d, 0x0a, 0
 
-; calc
 calc_prompt     db 'Calc: ', 0
 calc_result     db '= ', 0
 calc_error      db 'Error!', 0x0d, 0x0a, 0
 calc_divzero    db 'Division by zero!', 0x0d, 0x0a, 0
 
-; theme
 theme_white     db 'white', 0
 theme_black     db 'black', 0
 theme_ok_white  db 'Theme: WHITE (black on white)', 0x0d, 0x0a, 0
 theme_ok_black  db 'Theme: BLACK (white on black)', 0x0d, 0x0a, 0
 theme_unknown   db 'Unknown theme. Use: theme white / theme black', 0x0d, 0x0a, 0
-theme_help      db 'Usage: theme white / theme black (auto theme by time)', 0x0d, 0x0a, 0
+theme_help      db 'Usage: theme white / theme black', 0x0d, 0x0a, 0
 
-; snake
 snake_over_msg  db 'Game Over! Press any key...', 0x0d, 0x0a, 0
 snake_len       db 4
 snake_dir       db 1
@@ -1232,7 +1837,6 @@ apple_y         db 8
 snake_x         times 64 db 0
 snake_y         times 64 db 0
 
-; команды
 cmd_help        db 'help', 0
 cmd_time        db 'time', 0
 cmd_clear       db 'clear', 0
@@ -1242,7 +1846,7 @@ cmd_neofetch    db 'neofetch', 0
 cmd_calc        db 'calc', 0
 cmd_snake       db 'snake', 0
 cmd_theme       db 'theme', 0
+cmd_visual16    db 'visual16', 0
 
-; буферы
 input_buffer    times 64 db 0
 num_buffer      times 16 db 0
