@@ -500,6 +500,217 @@ print_number_ax:
     ret
 
 ; =============================================
+; TEXT EDITOR
+; =============================================
+
+do_editor:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    call clear_screen
+
+    ; Top status bar
+    mov ah, 0x02
+    xor bh, bh
+    xor dx, dx
+    int 0x10
+
+    mov bl, 0x70
+    mov si, editor_bar
+    call print_attr
+
+    mov word [editor_len], 0
+
+    ; Cursor to text area (row 2, col 0)
+    mov ah, 0x02
+    xor bh, bh
+    mov dh, 2
+    mov dl, 0
+    int 0x10
+
+    ; Show cursor
+    mov ah, 0x01
+    mov cx, 0x0607
+    int 0x10
+
+.editor_loop:
+    xor ax, ax
+    int 0x16
+
+    cmp al, 27                  ; ESC - exit
+    je .editor_exit
+
+    cmp al, 0x08                ; Backspace
+    je .editor_backspace
+
+    cmp al, 0x0D                ; Enter
+    je .editor_enter
+
+    ; Printable ASCII only (32..126)
+    cmp al, 32
+    jb .editor_loop
+    cmp al, 126
+    ja .editor_loop
+
+    cmp word [editor_len], 1020
+    jae .editor_loop
+
+    ; Save char to buffer
+    mov di, editor_buffer
+    add di, [editor_len]
+    stosb
+    inc word [editor_len]
+
+    ; Print char
+    push ax
+    mov ah, 0x09
+    xor bh, bh
+    mov bl, [theme_color]
+    mov cx, 1
+    int 0x10
+    pop ax
+
+    ; Advance cursor
+    mov ah, 0x03
+    xor bh, bh
+    int 0x10
+    inc dl
+    cmp dl, 80
+    jb .set_cur
+    xor dl, dl
+    inc dh
+    cmp dh, 24
+    jb .set_cur
+    call editor_scroll
+    mov dh, 23
+.set_cur:
+    mov ah, 0x02
+    xor bh, bh
+    int 0x10
+    jmp .editor_loop
+
+.editor_enter:
+    cmp word [editor_len], 1018
+    jae .editor_loop
+
+    mov di, editor_buffer
+    add di, [editor_len]
+    mov al, 0x0D
+    stosb
+    mov al, 0x0A
+    stosb
+    add word [editor_len], 2
+
+    mov ah, 0x03
+    xor bh, bh
+    int 0x10
+    xor dl, dl
+    inc dh
+    cmp dh, 24
+    jb .set_cur_enter
+    call editor_scroll
+    mov dh, 23
+.set_cur_enter:
+    mov ah, 0x02
+    xor bh, bh
+    int 0x10
+    jmp .editor_loop
+
+.editor_backspace:
+    cmp word [editor_len], 0
+    je .editor_loop
+
+    mov di, editor_buffer
+    add di, [editor_len]
+    dec di
+    cmp byte [di], 0x0A
+    jne .normal_bs
+
+    dec word [editor_len]
+    dec di
+    cmp byte [di], 0x0D
+    jne .skip_cr
+    dec word [editor_len]
+.skip_cr:
+    mov ah, 0x03
+    xor bh, bh
+    int 0x10
+    cmp dh, 2
+    jbe .editor_loop
+    dec dh
+    mov dl, 79
+    mov ah, 0x02
+    xor bh, bh
+    int 0x10
+    jmp .editor_loop
+
+.normal_bs:
+    dec word [editor_len]
+    mov ah, 0x03
+    xor bh, bh
+    int 0x10
+    cmp dl, 0
+    je .wrap_bs
+    dec dl
+    mov ah, 0x02
+    xor bh, bh
+    int 0x10
+    mov ax, 0x0920
+    mov bl, [theme_color]
+    mov cx, 1
+    int 0x10
+    jmp .editor_loop
+
+.wrap_bs:
+    cmp dh, 2
+    jbe .editor_loop
+    dec dh
+    mov dl, 79
+    mov ah, 0x02
+    xor bh, bh
+    int 0x10
+    mov ax, 0x0920
+    mov bl, [theme_color]
+    mov cx, 1
+    int 0x10
+    jmp .editor_loop
+
+.editor_exit:
+    mov di, editor_buffer
+    add di, [editor_len]
+    mov byte [di], 0
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+editor_scroll:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, 0x0601              ; Scroll up 1 line
+    mov bh, [theme_color]
+    mov ch, 2                   ; Preserve top status bar
+    mov cl, 0
+    mov dh, 24
+    mov dl, 79
+    int 0x10
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; =============================================
 ; COMMAND SHELL (TEXT MODE)
 ; =============================================
 
@@ -548,6 +759,10 @@ shell:
     call strcmp
     jc .snake
 
+    mov di, cmd_edit
+    call strcmp
+    jc .edit
+
     mov di, cmd_visual16
     call strcmp
     jc .visual16
@@ -592,6 +807,13 @@ shell:
 
 .snake:
     call do_snake
+    jmp shell
+
+.edit:
+    call do_editor
+    call clear_screen
+    mov si, banner
+    call print_string
     jmp shell
 
 .visual16:
@@ -1261,7 +1483,7 @@ do_visual16:
     cmp byte [v16_selected], 5
     je .app_neofetch
     cmp byte [v16_selected], 6
-    je .app_time
+    je .app_editor
     cmp byte [v16_selected], 7
     je .exit
     jmp .visual_loop
@@ -1284,8 +1506,8 @@ do_visual16:
 .app_neofetch:
     call v16_show_neofetch
     jmp .visual_loop
-.app_time:
-    call v16_show_time
+.app_editor:
+    call do_editor
     jmp .visual_loop
 
 .exit:
@@ -1513,55 +1735,6 @@ v16_show_neofetch:
     pop si
     ret
 
-v16_show_time:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-
-.time_loop:
-    call clear_screen
-    mov si, v16_time_top
-    call print_string
-    mov si, v16_time_title
-    call print_string
-    mov si, v16_time_sep
-    call print_string
-    mov si, v16_timeapp_empty
-    call print_string
-    mov si, v16_timeapp_label
-    call print_string
-    call do_time_real
-    mov si, v16_timeapp_pad
-    call print_string
-    mov si, v16_timeapp_empty
-    call print_string
-    mov si, v16_time_hint
-    call print_string
-    mov si, v16_time_bot
-    call print_string
-
-    mov cx, 0x000F
-    mov dx, 0x4240
-    mov ah, 0x86
-    int 0x15
-
-    mov ah, 0x01
-    int 0x16
-    jz .time_loop
-    xor ax, ax
-    int 0x16
-
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
 ; =============================================
 ; MENU DATA
 ; =============================================
@@ -1622,44 +1795,44 @@ times 60 db 0xCD
 db 0xB9, 0x0d, 0x0a, 0
 
 v16_item1:
-db 0xBA, '    [ 1 ]  Clock                                             ', 0xBA, 0x0d, 0x0a, 0
+db 0xBA, '    [ 1 ]  Clock                                            ', 0xBA, 0x0d, 0x0a, 0
 v16_item1_sel:
-db 0xBA, ' >> [ 1 ]  Clock                                             ', 0xBA, 0x0d, 0x0a, 0
+db 0xBA, ' >> [ 1 ]  Clock                                            ', 0xBA, 0x0d, 0x0a, 0
 
 v16_item2:
-db 0xBA, '    [ 2 ]  Hello                                             ', 0xBA, 0x0d, 0x0a, 0
+db 0xBA, '    [ 2 ]  Hello                                            ', 0xBA, 0x0d, 0x0a, 0
 v16_item2_sel:
-db 0xBA, ' >> [ 2 ]  Hello                                             ', 0xBA, 0x0d, 0x0a, 0
+db 0xBA, ' >> [ 2 ]  Hello                                            ', 0xBA, 0x0d, 0x0a, 0
 
 v16_item3:
-db 0xBA, '    [ 3 ]  Info                                              ', 0xBA, 0x0d, 0x0a, 0
+db 0xBA, '    [ 3 ]  Info                                             ', 0xBA, 0x0d, 0x0a, 0
 v16_item3_sel:
-db 0xBA, ' >> [ 3 ]  Info                                              ', 0xBA, 0x0d, 0x0a, 0
+db 0xBA, ' >> [ 3 ]  Info                                             ', 0xBA, 0x0d, 0x0a, 0
 
 v16_item4:
-db 0xBA, '    [ 4 ]  Calc                                              ', 0xBA, 0x0d, 0x0a, 0
+db 0xBA, '    [ 4 ]  Calc                                             ', 0xBA, 0x0d, 0x0a, 0
 v16_item4_sel:
-db 0xBA, ' >> [ 4 ]  Calc                                              ', 0xBA, 0x0d, 0x0a, 0
+db 0xBA, ' >> [ 4 ]  Calc                                             ', 0xBA, 0x0d, 0x0a, 0
 
 v16_item5:
-db 0xBA, '    [ 5 ]  Snake                                             ', 0xBA, 0x0d, 0x0a, 0
+db 0xBA, '    [ 5 ]  Snake                                            ', 0xBA, 0x0d, 0x0a, 0
 v16_item5_sel:
-db 0xBA, ' >> [ 5 ]  Snake                                             ', 0xBA, 0x0d, 0x0a, 0
+db 0xBA, ' >> [ 5 ]  Snake                                            ', 0xBA, 0x0d, 0x0a, 0
 
 v16_item6:
-db 0xBA, '    [ 6 ]  Neofetch                                          ', 0xBA, 0x0d, 0x0a, 0
+db 0xBA, '    [ 6 ]  Neofetch                                         ', 0xBA, 0x0d, 0x0a, 0
 v16_item6_sel:
-db 0xBA, ' >> [ 6 ]  Neofetch                                          ', 0xBA, 0x0d, 0x0a, 0
+db 0xBA, ' >> [ 6 ]  Neofetch                                         ', 0xBA, 0x0d, 0x0a, 0
 
 v16_item7:
-db 0xBA, '    [ 7 ]  Time                                              ', 0xBA, 0x0d, 0x0a, 0
+db 0xBA, '    [ 7 ]  Editor                                           ', 0xBA, 0x0d, 0x0a, 0
 v16_item7_sel:
-db 0xBA, ' >> [ 7 ]  Time                                              ', 0xBA, 0x0d, 0x0a, 0
+db 0xBA, ' >> [ 7 ]  Editor                                           ', 0xBA, 0x0d, 0x0a, 0
 
 v16_item8:
-db 0xBA, '    [ 8 ]  Exit to Text Mode                                 ', 0xBA, 0x0d, 0x0a, 0
+db 0xBA, '    [ 8 ]  Exit to Text Mode                                ', 0xBA, 0x0d, 0x0a, 0
 v16_item8_sel:
-db 0xBA, ' >> [ 8 ]  Exit to Text Mode                                 ', 0xBA, 0x0d, 0x0a, 0
+db 0xBA, ' >> [ 8 ]  Exit to Text Mode                                ', 0xBA, 0x0d, 0x0a, 0
 
 v16_bot:
 db 0xC8
@@ -1670,26 +1843,26 @@ v16_hint:
 db 0x0d, 0x0a
 db '  UP/DOWN - select, ENTER - open, ESC - exit to text', 0x0d, 0x0a, 0
 
-; Clock (unique labels)
+; Clock
 v16_clock_top:
 db 0xC9
 times 60 db 0xCD
 db 0xBB, 0x0d, 0x0a, 0
 v16_clock_title:
-db 0xBA, '                       CLOCK APP                             ', 0xBA, 0x0d, 0x0a, 0
+db 0xBA, '                       CLOCK APP                            ', 0xBA, 0x0d, 0x0a, 0
 v16_clock_sep:
 db 0xCC
 times 60 db 0xCD
 db 0xB9, 0x0d, 0x0a, 0
 v16_clock_empty:
-db 0xBA, '                                                             ', 0xBA, 0x0d, 0x0a, 0
+db 0xBA, '                                                            ', 0xBA, 0x0d, 0x0a, 0
 v16_clock_label:
 db 0xBA, '                       Time: ', 0
 v16_clock_pad:
 db '                        ', 0xBA, 0x0d, 0x0a, 0
 v16_clock_hint:
-db 0xBA, '                                                             ', 0xBA, 0x0d, 0x0a
-db 0xBA, '                  Press any key to return...                 ', 0xBA, 0x0d, 0x0a, 0
+db 0xBA, '                                                            ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                 Press any key to return...                 ', 0xBA, 0x0d, 0x0a, 0
 v16_clock_bot:
 db 0xC8
 times 60 db 0xCD
@@ -1700,11 +1873,11 @@ v16_hello_screen:
 db 0xC9
 times 60 db 0xCD
 db 0xBB, 0x0d, 0x0a
-db 0xBA, '                       HELLO APP                             ', 0xBA, 0x0d, 0x0a
-db 0xBA, '                                                             ', 0xBA, 0x0d, 0x0a
-db 0xBA, '                 Welcome to microDOS!                        ', 0xBA, 0x0d, 0x0a
-db 0xBA, '                                                             ', 0xBA, 0x0d, 0x0a
-db 0xBA, '                  Press any key to return...                 ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                       HELLO APP                            ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                                                            ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                 Welcome to microDOS!                       ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                                                            ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                 Press any key to return...                 ', 0xBA, 0x0d, 0x0a
 db 0xC8
 times 60 db 0xCD
 db 0xBC, 0x0d, 0x0a, 0
@@ -1714,12 +1887,12 @@ v16_info_screen:
 db 0xC9
 times 60 db 0xCD
 db 0xBB, 0x0d, 0x0a
-db 0xBA, '                      SYSTEM INFO                            ', 0xBA, 0x0d, 0x0a
-db 0xBA, '                                                             ', 0xBA, 0x0d, 0x0a
-db 0xBA, '                     microDOS v0.6                            ', 0xBA, 0x0d, 0x0a
-db 0xBA, '                     16-bit Real Mode                        ', 0xBA, 0x0d, 0x0a
-db 0xBA, '                                                             ', 0xBA, 0x0d, 0x0a
-db 0xBA, '                  Press any key to return...                 ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                      SYSTEM INFO                           ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                                                            ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                     microDOS v0.6                          ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                     16-bit Real Mode                       ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                                                            ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                 Press any key to return...                 ', 0xBA, 0x0d, 0x0a
 db 0xC8
 times 60 db 0xCD
 db 0xBC, 0x0d, 0x0a, 0
@@ -1729,33 +1902,8 @@ v16_calc_screen:
 db 0xC9
 times 60 db 0xCD
 db 0xBB, 0x0d, 0x0a
-db 0xBA, '                    CALCULATOR APP                           ', 0xBA, 0x0d, 0x0a
-db 0xBA, '                                                             ', 0xBA, 0x0d, 0x0a
-db 0xC8
-times 60 db 0xCD
-db 0xBC, 0x0d, 0x0a, 0
-
-; Time (unique labels: v16_timeapp_*)
-v16_time_top:
-db 0xC9
-times 60 db 0xCD
-db 0xBB, 0x0d, 0x0a, 0
-v16_time_title:
-db 0xBA, '                       TIME APP                              ', 0xBA, 0x0d, 0x0a, 0
-v16_time_sep:
-db 0xCC
-times 60 db 0xCD
-db 0xB9, 0x0d, 0x0a, 0
-v16_timeapp_empty:
-db 0xBA, '                                                             ', 0xBA, 0x0d, 0x0a, 0
-v16_timeapp_label:
-db 0xBA, '                       Time: ', 0
-v16_timeapp_pad:
-db '                        ', 0xBA, 0x0d, 0x0a, 0
-v16_time_hint:
-db 0xBA, '                                                             ', 0xBA, 0x0d, 0x0a
-db 0xBA, '                  Press any key to return...                 ', 0xBA, 0x0d, 0x0a, 0
-v16_time_bot:
+db 0xBA, '                    CALCULATOR APP                          ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                                                            ', 0xBA, 0x0d, 0x0a
 db 0xC8
 times 60 db 0xCD
 db 0xBC, 0x0d, 0x0a, 0
@@ -1765,14 +1913,18 @@ v16_neofetch_screen:
 db 0xC9
 times 60 db 0xCD
 db 0xBB, 0x0d, 0x0a
-db 0xBA, '                    NEOFETCH APP                             ', 0xBA, 0x0d, 0x0a
-db 0xBA, '                                                             ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                    NEOFETCH APP                            ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                                                            ', 0xBA, 0x0d, 0x0a
 db 0xC8
 times 60 db 0xCD
 db 0xBC, 0x0d, 0x0a, 0
 
 v16_press_key:
 db 0x0d, 0x0a, 'Press any key to return...', 0
+
+; Editor bar
+editor_bar:
+db ' microDOS Text Editor | ESC: Exit to Shell/Menu                               ', 0
 
 ; =============================================
 ; MAIN DATA
@@ -1790,6 +1942,7 @@ help_msg        db 'commands:', 0x0d, 0x0a
                 db '  neofetch  - pretty system info', 0x0d, 0x0a
                 db '  calc      - calculator (e.g., 5+3)', 0x0d, 0x0a
                 db '  snake     - play snake game', 0x0d, 0x0a
+                db '  edit      - simple text editor', 0x0d, 0x0a
                 db '  visual16  - enter Visual16 shell', 0x0d, 0x0a
                 db '  theme white/black - change theme', 0x0d, 0x0a
                 db '  reboot    - restart computer', 0x0d, 0x0a, 0
@@ -1802,7 +1955,7 @@ info_msg        db 'microDOS v0.6', 0x0d, 0x0a
 crlf            db 0x0d, 0x0a, 0
 
 neo_logo        db 0x0d, 0x0a
-                db '_      _  ____ ____  ____  ____  ____  ____ ', 0x0d, 0x0a
+                db '_     _  ____ ____  ____  ____  ____  ____ ', 0x0d, 0x0a
                 db '/ \__/|/ \/   _Y  __\/  _ \/  _ \/  _ \/ ___\\', 0x0d, 0x0a
                 db '| |\/||| ||  / |  \/|| / \|| | \|| / \||    \\', 0x0d, 0x0a
                 db '| |  ||| ||  \_|    /| \_/|| |_/|| \_/|\___ |', 0x0d, 0x0a
@@ -1846,7 +1999,11 @@ cmd_neofetch    db 'neofetch', 0
 cmd_calc        db 'calc', 0
 cmd_snake       db 'snake', 0
 cmd_theme       db 'theme', 0
+cmd_edit        db 'edit', 0
 cmd_visual16    db 'visual16', 0
 
 input_buffer    times 64 db 0
 num_buffer      times 16 db 0
+
+editor_len      dw 0
+editor_buffer   times 1024 db 0
