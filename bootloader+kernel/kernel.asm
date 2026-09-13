@@ -4,7 +4,7 @@
 start:
     cli
     cld
-    mov [cs:boot_drive], dl     ; Сохраняем номер загрузочного диска BIOS
+    mov [cs:boot_drive], dl
     mov ax, 0x1000
     mov ds, ax
     mov es, ax
@@ -53,7 +53,7 @@ boot_menu:
     jmp .menu_loop
 
 .down:
-    cmp byte [menu_selected], 1
+    cmp byte [menu_selected], 2
     je .menu_loop
     inc byte [menu_selected]
     jmp .menu_loop
@@ -61,14 +61,25 @@ boot_menu:
 .select:
     cmp byte [menu_selected], 0
     je .go_visual
+    cmp byte [menu_selected], 1
+    je .go_text
+    cmp byte [menu_selected], 2
+    je .go_gfx
+    jmp .menu_loop
+
+.go_visual:
+    call do_visual16
+    jmp .menu_loop
+
+.go_text:
     call clear_screen
     mov si, banner
     call print_string
     call shell
     jmp .menu_loop
 
-.go_visual:
-    call do_visual16
+.go_gfx:
+    call do_graphics
     jmp .menu_loop
 
 .exit:
@@ -104,9 +115,19 @@ menu_draw:
     jne .item2_normal
     mov si, menu_item2_sel
     call print_string
-    jmp .done
+    jmp .item3
 .item2_normal:
     mov si, menu_item2
+    call print_string
+
+.item3:
+    cmp byte [menu_selected], 2
+    jne .item3_normal
+    mov si, menu_item3_sel
+    call print_string
+    jmp .done
+.item3_normal:
+    mov si, menu_item3
     call print_string
 
 .done:
@@ -118,7 +139,7 @@ menu_draw:
     ret
 
 ; =============================================
-; THEME VARIABLES
+; THEME
 ; =============================================
 
 theme_color db 0x0F
@@ -135,7 +156,7 @@ set_theme_black:
     ret
 
 ; =============================================
-; CORE FUNCTIONS
+; CORE
 ; =============================================
 
 print_char_al:
@@ -523,7 +544,7 @@ print_number_ax:
     ret
 
 ; =============================================
-; FILE SYSTEM DRIVER (FLAT FS)
+; FLAT FS
 ; =============================================
 
 lba_to_chs:
@@ -638,7 +659,6 @@ do_dir:
     push di
 
     call fs_load_dir
-    jc .err
 
     mov si, fs_dir_title
     call print_string
@@ -650,7 +670,6 @@ do_dir:
 .loop:
     cmp byte [di + 15], 1
     jne .skip
-
     inc dx
     push cx
     mov cx, 11
@@ -667,15 +686,12 @@ do_dir:
 .pcont:
     loop .pname
     pop cx
-
     mov si, fs_col_sep
     call print_string
-
     mov ax, [di + 13]
     call print_number_ax
     mov si, fs_bytes_lbl
     call print_string
-
 .skip:
     add di, 16
     dec cx
@@ -684,11 +700,6 @@ do_dir:
     test dx, dx
     jnz .done
     mov si, fs_empty_lbl
-    call print_string
-    jmp .done
-
-.err:
-    mov si, fs_err_read
     call print_string
 .done:
     pop di
@@ -710,19 +721,15 @@ do_type:
     mov si, fs_prompt_name
     call print_string
     call read_line
-
     cmp byte [input_buffer], 0
     je .done
 
     call fs_load_dir
-    jc .disk_err
-
     mov di, fs_dir_buffer
     mov cx, 32
 .search:
     cmp byte [di + 15], 1
     jne .next_search
-
     push cx
     push di
     mov si, input_buffer
@@ -730,7 +737,6 @@ do_type:
     pop di
     pop cx
     jc .found
-
 .next_search:
     add di, 16
     dec cx
@@ -744,7 +750,6 @@ do_type:
     mov ax, [di + 11]
     mov bx, fs_file_buffer
     call read_sector_lba
-    jc .disk_err
     inc ax
     add bx, 512
     call read_sector_lba
@@ -759,11 +764,6 @@ do_type:
     mov si, fs_file_buffer
     call print_string
     call newline
-    jmp .done
-
-.disk_err:
-    mov si, fs_err_read
-    call print_string
 .done:
     pop di
     pop si
@@ -791,13 +791,10 @@ do_save:
     mov si, fs_prompt_save
     call print_string
     call read_line
-
     cmp byte [input_buffer], 0
     je .done
 
     call fs_load_dir
-    jc .disk_err
-
     mov di, fs_dir_buffer
     mov cx, 32
     mov bx, 0xFFFF
@@ -806,12 +803,10 @@ do_save:
 .scan:
     cmp byte [di + 15], 1
     je .check_exist
-
     cmp bx, 0xFFFF
     jne .advance
     mov bx, dx
     jmp .advance
-
 .check_exist:
     push cx
     push di
@@ -820,7 +815,6 @@ do_save:
     pop di
     pop cx
     jc .overwrite
-
 .advance:
     add di, 16
     inc dx
@@ -829,7 +823,6 @@ do_save:
 
     cmp bx, 0xFFFF
     je .disk_full
-
     mov ax, bx
     shl ax, 4
     mov di, fs_dir_buffer
@@ -841,7 +834,6 @@ do_save:
     shl ax, 1
     add ax, 2
     mov [di + 11], ax
-
     mov ax, [editor_len]
     mov [di + 13], ax
     mov byte [di + 15], 1
@@ -865,26 +857,17 @@ do_save:
     mov ax, [di + 11]
     mov bx, editor_buffer
     call write_sector_lba
-    jc .disk_err
     inc ax
     add bx, 512
     call write_sector_lba
-    jc .disk_err
 
     call fs_save_dir
-    jc .disk_err
-
     mov si, fs_save_ok
     call print_string
     jmp .done
 
 .disk_full:
     mov si, fs_err_full
-    call print_string
-    jmp .done
-
-.disk_err:
-    mov si, fs_err_write
     call print_string
 .done:
     pop di
@@ -896,7 +879,7 @@ do_save:
     ret
 
 ; =============================================
-; TEXT EDITOR
+; EDITOR
 ; =============================================
 
 do_editor:
@@ -933,21 +916,16 @@ do_editor:
 .editor_loop:
     xor ax, ax
     int 0x16
-
-    cmp al, 27                  ; ESC - выход
+    cmp al, 27
     je .editor_exit
-
-    cmp al, 0x08                ; Backspace
+    cmp al, 0x08
     je .editor_backspace
-
-    cmp al, 0x0D                ; Enter
+    cmp al, 0x0D
     je .editor_enter
-
     cmp al, 32
     jb .editor_loop
     cmp al, 126
     ja .editor_loop
-
     cmp word [editor_len], 1020
     jae .editor_loop
 
@@ -985,7 +963,6 @@ do_editor:
 .editor_enter:
     cmp word [editor_len], 1018
     jae .editor_loop
-
     mov di, editor_buffer
     add di, [editor_len]
     mov al, 0x0D
@@ -993,7 +970,6 @@ do_editor:
     mov al, 0x0A
     stosb
     add word [editor_len], 2
-
     mov ah, 0x03
     xor bh, bh
     int 0x10
@@ -1012,13 +988,11 @@ do_editor:
 .editor_backspace:
     cmp word [editor_len], 0
     je .editor_loop
-
     mov di, editor_buffer
     add di, [editor_len]
     dec di
     cmp byte [di], 0x0A
     jne .normal_bs
-
     dec word [editor_len]
     dec di
     cmp byte [di], 0x0D
@@ -1072,7 +1046,6 @@ do_editor:
     mov di, editor_buffer
     add di, [editor_len]
     mov byte [di], 0
-
     pop di
     pop si
     pop dx
@@ -1100,7 +1073,7 @@ editor_scroll:
     ret
 
 ; =============================================
-; GRAPHICS DEMO (VGA MODE 13H)
+; GFX - 3 MODES
 ; =============================================
 
 do_graphics:
@@ -1108,13 +1081,57 @@ do_graphics:
     push bx
     push cx
     push dx
-    push es
-    push di
     push si
+    push di
+
+    call clear_screen
+    mov si, gfx_menu
+    call print_string
+
+    xor ax, ax
+    int 0x16
+
+    cmp al, '1'
+    je .mode1
+    cmp al, '2'
+    je .mode2
+    cmp al, '3'
+    je .mode3
+    jmp .done
+
+.mode1:
+    call gfx_gradient
+    jmp .done
+.mode2:
+    call gfx_chess
+    jmp .done
+.mode3:
+    call gfx_plasma
+    jmp .done
+
+.done:
+    mov ax, 0x0003
+    int 0x10
+    call clear_screen
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+gfx_gradient:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push es
 
     mov ax, 0x0013
     int 0x10
-
     mov ax, 0xA000
     mov es, ax
 
@@ -1131,7 +1148,6 @@ do_graphics:
     mul bx
     mov di, ax
     pop dx
-
     xor cx, cx
 .bar_x:
     mov al, cl
@@ -1140,7 +1156,6 @@ do_graphics:
     inc cx
     cmp cx, 320
     jb .bar_x
-
     inc dx
     cmp dx, 60
     jb .bar_y
@@ -1154,11 +1169,9 @@ do_graphics:
     add ax, 110
     mov di, ax
     pop dx
-
     mov al, 10
     mov cx, 100
     rep stosb
-
     inc dx
     cmp dx, 150
     jb .box_y
@@ -1168,42 +1181,137 @@ do_graphics:
     mov dh, 1
     mov dl, 9
     int 0x10
-
     mov bl, 14
     mov si, gfx_title
-    call print_gfx_str
-
-    mov ah, 0x02
-    xor bh, bh
-    mov dh, 14
-    mov dl, 15
-    int 0x10
-
-    mov bl, 0
-    mov si, gfx_box_text
-    call print_gfx_str
-
-    mov ah, 0x02
-    xor bh, bh
-    mov dh, 22
-    mov dl, 7
-    int 0x10
-
-    mov bl, 15
-    mov si, gfx_hint
     call print_gfx_str
 
     xor ax, ax
     int 0x16
 
-    mov ax, 0x0003
-    int 0x10
-
-    call clear_screen
-
-    pop si
-    pop di
     pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+gfx_chess:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+
+    mov ax, 0x0013
+    int 0x10
+    mov ax, 0xA000
+    mov es, ax
+
+    xor di, di
+    mov dx, 0
+.row:
+    mov cx, 0
+.col:
+    mov ax, dx
+    shr ax, 5
+    mov bx, cx
+    shr bx, 5
+    xor ax, bx
+    and ax, 1
+    jz .white
+    mov al, 0
+    jmp .put
+.white:
+    mov al, 15
+.put:
+    mov [es:di], al
+    inc di
+    inc cx
+    cmp cx, 320
+    jb .col
+    inc dx
+    cmp dx, 200
+    jb .row
+
+    mov ah, 0x02
+    xor bh, bh
+    mov dh, 1
+    mov dl, 9
+    int 0x10
+    mov bl, 14
+    mov si, gfx_chess_title
+    call print_gfx_str
+
+    xor ax, ax
+    int 0x16
+
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+gfx_plasma:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+
+    mov ax, 0x0013
+    int 0x10
+    mov ax, 0xA000
+    mov es, ax
+
+    xor di, di
+    mov dx, 0
+.p_row:
+    mov cx, 0
+.p_col:
+    mov ax, dx
+    add ax, cx
+    xor ah, al
+    shr ax, 2
+    mov bx, dx
+    sub bx, cx
+    xor bh, bl
+    add ax, bx
+    and al, 63
+    cmp al, 32
+    jbe .c1
+    mov al, 40
+    jmp .put
+.c1:
+    mov al, 4
+.put:
+    mov [es:di], al
+    inc di
+    inc cx
+    cmp cx, 320
+    jb .p_col
+    inc dx
+    cmp dx, 200
+    jb .p_row
+
+    mov ah, 0x02
+    xor bh, bh
+    mov dh, 1
+    mov dl, 9
+    int 0x10
+    mov bl, 14
+    mov si, gfx_plasma_title
+    call print_gfx_str
+
+    xor ax, ax
+    int 0x16
+
+    pop es
+    pop di
     pop dx
     pop cx
     pop bx
@@ -1224,7 +1332,76 @@ print_gfx_str:
     ret
 
 ; =============================================
-; COMMAND SHELL (TEXT MODE)
+; BOO
+; =============================================
+
+do_boo:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov si, boo_top
+    call print_string
+
+    mov si, input_buffer
+    add si, 4
+.skip_spaces_boo:
+    cmp byte [si], ' '
+    jne .print_text_boo
+    inc si
+    jmp .skip_spaces_boo
+.print_text_boo:
+    call print_string
+
+    mov si, boo_mid
+    call print_string
+    call newline
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+do_boo_v16:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov si, boo_top
+    call print_string
+
+    mov si, input_buffer
+.skip_spaces_v16:
+    cmp byte [si], ' '
+    jne .print_text_v16
+    inc si
+    jmp .skip_spaces_v16
+.print_text_v16:
+    call print_string
+
+    mov si, boo_mid
+    call print_string
+    call newline
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; =============================================
+; SHELL
 ; =============================================
 
 shell:
@@ -1239,62 +1416,48 @@ shell:
     mov di, cmd_dir
     call strcmp
     jc .dir
-
     mov di, cmd_type
     call strcmp
     jc .type
-
     mov di, cmd_save
     call strcmp
     jc .save
-
     mov di, cmd_theme
     call strcmp
     jc .theme_cmd
-
     mov di, cmd_help
     call strcmp
     jc .help
-
     mov di, cmd_time
     call strcmp
     jc .time
-
     mov di, cmd_clear
     call strcmp
     jc .clear
-
     mov di, cmd_info
     call strcmp
     jc .info
-
     mov di, cmd_reboot
     call strcmp
     jc .reboot
-
     mov di, cmd_neofetch
     call strcmp
     jc .neofetch
-
     mov di, cmd_calc
     call strcmp
     jc .calc
-
     mov di, cmd_snake
     call strcmp
     jc .snake
-
     mov di, cmd_edit
     call strcmp
     jc .edit
-
-    mov di, cmd_gfx
-    call strcmp
-    jc .gfx
-
     mov di, cmd_visual16
     call strcmp
     jc .visual16
+    mov di, cmd_boo
+    call strcmp
+    jc .boo_cmd
 
     mov si, unknown_msg
     call print_string
@@ -1303,76 +1466,59 @@ shell:
 .dir:
     call do_dir
     jmp shell
-
 .type:
     call do_type
     jmp shell
-
 .save:
     call do_save
     jmp shell
-
 .theme_cmd:
     call do_theme
     jmp shell
-
 .help:
     mov si, help_msg
     call print_string
     jmp shell
-
 .time:
     call do_time
     jmp shell
-
 .clear:
     call clear_screen
     jmp shell
-
 .info:
     call do_info
     jmp shell
-
 .reboot:
     mov si, reboot_msg
     call print_string
     int 0x19
-
 .neofetch:
     call do_neofetch
     jmp shell
-
 .calc:
     call do_calc
     jmp shell
-
 .snake:
     call do_snake
     jmp shell
-
 .edit:
     call do_editor
     call clear_screen
     mov si, banner
     call print_string
     jmp shell
-
-.gfx:
-    call do_graphics
-    call clear_screen
-    mov si, banner
-    call print_string
-    jmp shell
-
 .visual16:
     call do_visual16
     call clear_screen
     mov si, banner
     call print_string
     jmp shell
+.boo_cmd:
+    call do_boo
+    jmp shell
 
 ; =============================================
-; COMMAND IMPLEMENTATIONS
+; COMMANDS
 ; =============================================
 
 do_time:
@@ -1625,7 +1771,6 @@ do_theme:
 
     mov si, input_buffer
     add si, 6
-
 .skip_spaces:
     cmp byte [si], ' '
     je .skip_spaces_next
@@ -1633,7 +1778,6 @@ do_theme:
 .skip_spaces_next:
     inc si
     jmp .skip_spaces
-
 .check:
     cmp byte [si], 0
     je .show_help
@@ -1646,12 +1790,10 @@ do_theme:
     mov si, theme_unknown
     call print_string
     jmp .done
-
 .show_help:
     mov si, theme_help
     call print_string
     jmp .done
-
 .set_white:
     call set_theme_white
     call clear_screen
@@ -1660,7 +1802,6 @@ do_theme:
     mov si, theme_ok_white
     call print_string
     jmp .done
-
 .set_black:
     call set_theme_black
     call clear_screen
@@ -1668,14 +1809,13 @@ do_theme:
     call print_string
     mov si, theme_ok_black
     call print_string
-
 .done:
     pop di
     pop si
     ret
 
 ; =============================================
-; SNAKE GAME
+; SNAKE
 ; =============================================
 
 do_snake:
@@ -1752,7 +1892,6 @@ do_snake:
 
 .move:
     call clear_tail
-
     mov cl, [snake_len]
     dec cl
     mov si, cx
@@ -1775,7 +1914,6 @@ do_snake:
     je .down_move
     cmp byte [snake_dir], 3
     je .left_move
-
 .up_move:
     dec ah
     jmp .check
@@ -1830,13 +1968,11 @@ do_snake:
     call print_string
     xor ax, ax
     int 0x16
-
 .exit:
     mov ah, 0x01
     mov cx, 0x0607
     int 0x10
     call clear_screen
-
     pop di
     pop si
     pop dx
@@ -1978,7 +2114,7 @@ spawn_apple:
     ret
 
 ; =============================================
-; VISUAL16 v0.9
+; VISUAL16
 ; =============================================
 
 do_visual16:
@@ -2033,7 +2169,7 @@ do_visual16:
     cmp byte [v16_selected], 6
     je .app_editor
     cmp byte [v16_selected], 7
-    je .app_graphics
+    je .app_boo
     cmp byte [v16_selected], 8
     je .app_files
     cmp byte [v16_selected], 9
@@ -2061,8 +2197,8 @@ do_visual16:
 .app_editor:
     call do_editor
     jmp .visual_loop
-.app_graphics:
-    call do_graphics
+.app_boo:
+    call v16_show_boo
     jmp .visual_loop
 .app_files:
     call v16_show_files
@@ -2086,7 +2222,6 @@ v16_draw_screen:
     push di
 
     call clear_screen
-
     mov si, v16_top
     call print_string
     mov si, v16_title_line
@@ -2102,7 +2237,6 @@ v16_draw_screen:
 .i1n:
     mov si, v16_item1
     call print_string
-
 .i2:
     cmp byte [v16_selected], 1
     jne .i2n
@@ -2112,7 +2246,6 @@ v16_draw_screen:
 .i2n:
     mov si, v16_item2
     call print_string
-
 .i3:
     cmp byte [v16_selected], 2
     jne .i3n
@@ -2122,7 +2255,6 @@ v16_draw_screen:
 .i3n:
     mov si, v16_item3
     call print_string
-
 .i4:
     cmp byte [v16_selected], 3
     jne .i4n
@@ -2132,7 +2264,6 @@ v16_draw_screen:
 .i4n:
     mov si, v16_item4
     call print_string
-
 .i5:
     cmp byte [v16_selected], 4
     jne .i5n
@@ -2142,7 +2273,6 @@ v16_draw_screen:
 .i5n:
     mov si, v16_item5
     call print_string
-
 .i6:
     cmp byte [v16_selected], 5
     jne .i6n
@@ -2152,7 +2282,6 @@ v16_draw_screen:
 .i6n:
     mov si, v16_item6
     call print_string
-
 .i7:
     cmp byte [v16_selected], 6
     jne .i7n
@@ -2162,7 +2291,6 @@ v16_draw_screen:
 .i7n:
     mov si, v16_item7
     call print_string
-
 .i8:
     cmp byte [v16_selected], 7
     jne .i8n
@@ -2172,7 +2300,6 @@ v16_draw_screen:
 .i8n:
     mov si, v16_item8
     call print_string
-
 .i9:
     cmp byte [v16_selected], 8
     jne .i9n
@@ -2182,7 +2309,6 @@ v16_draw_screen:
 .i9n:
     mov si, v16_item9
     call print_string
-
 .i10:
     cmp byte [v16_selected], 9
     jne .i10n
@@ -2192,13 +2318,11 @@ v16_draw_screen:
 .i10n:
     mov si, v16_item10
     call print_string
-
 .bot:
     mov si, v16_bot
     call print_string
     mov si, v16_hint
     call print_string
-
     pop di
     pop si
     pop dx
@@ -2212,10 +2336,6 @@ v16_wait_key:
     int 0x16
     ret
 
-; =============================================
-; V16 APPS
-; =============================================
-
 v16_show_clock:
     push ax
     push bx
@@ -2223,7 +2343,6 @@ v16_show_clock:
     push dx
     push si
     push di
-
 .clock_loop:
     call clear_screen
     mov si, v16_clock_top
@@ -2245,18 +2364,15 @@ v16_show_clock:
     call print_string
     mov si, v16_clock_bot
     call print_string
-
     mov cx, 0x000F
     mov dx, 0x4240
     mov ah, 0x86
     int 0x15
-
     mov ah, 0x01
     int 0x16
     jz .clock_loop
     xor ax, ax
     int 0x16
-
     pop di
     pop si
     pop dx
@@ -2313,6 +2429,27 @@ v16_show_neofetch:
     pop si
     ret
 
+v16_show_boo:
+    push si
+    call clear_screen
+    mov si, v16_boo_screen
+    call print_string
+    mov si, v16_boo_prompt
+    call print_string
+    mov di, input_buffer
+    call read_line
+    cmp byte [input_buffer], 0
+    je .done
+    call clear_screen
+    call do_boo_v16
+    mov si, v16_press_key
+    call print_string
+    xor ax, ax
+    int 0x16
+.done:
+    pop si
+    ret
+
 v16_show_files:
     push si
     call clear_screen
@@ -2325,7 +2462,7 @@ v16_show_files:
     ret
 
 ; =============================================
-; MENU DATA
+; DATA
 ; =============================================
 
 menu_selected db 0
@@ -2337,7 +2474,7 @@ times 60 db 0xCD
 db 0xBB, 0x0d, 0x0a, 0
 
 menu_title:
-db 0xBA, '                    microDOS v0.9 Boot Menu                 ', 0xBA, 0x0d, 0x0a, 0
+db 0xBA, '                  microDOS v0.9.1 Boot Menu                  ', 0xBA, 0x0d, 0x0a, 0
 
 menu_sep:
 db 0xCC
@@ -2354,6 +2491,11 @@ db 0xBA, '    [ 2 ]  Text Mode (Command Shell)                        ', 0xBA, 0
 menu_item2_sel:
 db 0xBA, ' >> [ 2 ]  Text Mode (Command Shell)                        ', 0xBA, 0x0d, 0x0a, 0
 
+menu_item3:
+db 0xBA, '    [ 3 ]  Graphics Demo (3 modes)                          ', 0xBA, 0x0d, 0x0a, 0
+menu_item3_sel:
+db 0xBA, ' >> [ 3 ]  Graphics Demo (3 modes)                          ', 0xBA, 0x0d, 0x0a, 0
+
 menu_bot:
 db 0xC8
 times 60 db 0xCD
@@ -2362,10 +2504,6 @@ db 0xBC, 0x0d, 0x0a, 0
 menu_hint:
 db 0x0d, 0x0a
 db '  Use UP/DOWN arrows, ENTER to select', 0x0d, 0x0a, 0
-
-; =============================================
-; VISUAL16 DATA
-; =============================================
 
 v16_selected db 0
 
@@ -2376,7 +2514,7 @@ times 60 db 0xCD
 db 0xBB, 0x0d, 0x0a, 0
 
 v16_title_line:
-db 0xBA, '                    microDOS Visual16 v0.9                  ', 0xBA, 0x0d, 0x0a, 0
+db 0xBA, '                  microDOS Visual16 v0.9.1                 ', 0xBA, 0x0d, 0x0a, 0
 
 v16_sep:
 db 0xCC
@@ -2387,47 +2525,38 @@ v16_item1:
 db 0xBA, '    [ 1 ]  Clock                                            ', 0xBA, 0x0d, 0x0a, 0
 v16_item1_sel:
 db 0xBA, ' >> [ 1 ]  Clock                                            ', 0xBA, 0x0d, 0x0a, 0
-
 v16_item2:
 db 0xBA, '    [ 2 ]  Hello                                            ', 0xBA, 0x0d, 0x0a, 0
 v16_item2_sel:
 db 0xBA, ' >> [ 2 ]  Hello                                            ', 0xBA, 0x0d, 0x0a, 0
-
 v16_item3:
 db 0xBA, '    [ 3 ]  Info                                             ', 0xBA, 0x0d, 0x0a, 0
 v16_item3_sel:
 db 0xBA, ' >> [ 3 ]  Info                                             ', 0xBA, 0x0d, 0x0a, 0
-
 v16_item4:
 db 0xBA, '    [ 4 ]  Calc                                             ', 0xBA, 0x0d, 0x0a, 0
 v16_item4_sel:
 db 0xBA, ' >> [ 4 ]  Calc                                             ', 0xBA, 0x0d, 0x0a, 0
-
 v16_item5:
 db 0xBA, '    [ 5 ]  Snake                                            ', 0xBA, 0x0d, 0x0a, 0
 v16_item5_sel:
 db 0xBA, ' >> [ 5 ]  Snake                                            ', 0xBA, 0x0d, 0x0a, 0
-
 v16_item6:
 db 0xBA, '    [ 6 ]  Neofetch                                         ', 0xBA, 0x0d, 0x0a, 0
 v16_item6_sel:
 db 0xBA, ' >> [ 6 ]  Neofetch                                         ', 0xBA, 0x0d, 0x0a, 0
-
 v16_item7:
 db 0xBA, '    [ 7 ]  Editor                                           ', 0xBA, 0x0d, 0x0a, 0
 v16_item7_sel:
 db 0xBA, ' >> [ 7 ]  Editor                                           ', 0xBA, 0x0d, 0x0a, 0
-
 v16_item8:
-db 0xBA, '    [ 8 ]  Graphics                                         ', 0xBA, 0x0d, 0x0a, 0
+db 0xBA, '    [ 8 ]  Boo                                              ', 0xBA, 0x0d, 0x0a, 0
 v16_item8_sel:
-db 0xBA, ' >> [ 8 ]  Graphics                                         ', 0xBA, 0x0d, 0x0a, 0
-
+db 0xBA, ' >> [ 8 ]  Boo                                              ', 0xBA, 0x0d, 0x0a, 0
 v16_item9:
 db 0xBA, '    [ 9 ]  Files (DIR)                                      ', 0xBA, 0x0d, 0x0a, 0
 v16_item9_sel:
 db 0xBA, ' >> [ 9 ]  Files (DIR)                                      ', 0xBA, 0x0d, 0x0a, 0
-
 v16_item10:
 db 0xBA, '    [ 10]  Exit to Text Mode                                ', 0xBA, 0x0d, 0x0a, 0
 v16_item10_sel:
@@ -2442,7 +2571,6 @@ v16_hint:
 db 0x0d, 0x0a
 db '  UP/DOWN - select, ENTER - open, ESC - exit to text', 0x0d, 0x0a, 0
 
-; Clock
 v16_clock_top:
 db 0xC9
 times 60 db 0xCD
@@ -2467,7 +2595,6 @@ db 0xC8
 times 60 db 0xCD
 db 0xBC, 0x0d, 0x0a, 0
 
-; Hello
 v16_hello_screen:
 db 0xC9
 times 60 db 0xCD
@@ -2481,14 +2608,13 @@ db 0xC8
 times 60 db 0xCD
 db 0xBC, 0x0d, 0x0a, 0
 
-; Info
 v16_info_screen:
 db 0xC9
 times 60 db 0xCD
 db 0xBB, 0x0d, 0x0a
 db 0xBA, '                       SYSTEM INFO                          ', 0xBA, 0x0d, 0x0a
 db 0xBA, '                                                            ', 0xBA, 0x0d, 0x0a
-db 0xBA, '                      microDOS v0.9                         ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                     microDOS v0.9.1                        ', 0xBA, 0x0d, 0x0a
 db 0xBA, '                      16-bit Real Mode                      ', 0xBA, 0x0d, 0x0a
 db 0xBA, '                                                            ', 0xBA, 0x0d, 0x0a
 db 0xBA, '                  Press any key to return...                ', 0xBA, 0x0d, 0x0a
@@ -2496,7 +2622,6 @@ db 0xC8
 times 60 db 0xCD
 db 0xBC, 0x0d, 0x0a, 0
 
-; Calc
 v16_calc_screen:
 db 0xC9
 times 60 db 0xCD
@@ -2507,7 +2632,6 @@ db 0xC8
 times 60 db 0xCD
 db 0xBC, 0x0d, 0x0a, 0
 
-; Neofetch
 v16_neofetch_screen:
 db 0xC9
 times 60 db 0xCD
@@ -2518,53 +2642,95 @@ db 0xC8
 times 60 db 0xCD
 db 0xBC, 0x0d, 0x0a, 0
 
+v16_boo_screen:
+db 0xC9
+times 60 db 0xCD
+db 0xBB, 0x0d, 0x0a
+db 0xBA, '                         BOO APP                            ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                                                            ', 0xBA, 0x0d, 0x0a
+db 0xBA, '            Type any text and press ENTER                   ', 0xBA, 0x0d, 0x0a
+db 0xBA, '            The ghost will speak it!                        ', 0xBA, 0x0d, 0x0a
+db 0xBA, '                                                            ', 0xBA, 0x0d, 0x0a
+db 0xC8
+times 60 db 0xCD
+db 0xBC, 0x0d, 0x0a, 0
+
+v16_boo_prompt:
+db 'Boo says: ', 0
+
 v16_press_key:
 db 0x0d, 0x0a, 'Press any key to return...', 0
 
-; Editor bar
 editor_bar:
-db ' microDOS Text Editor | ESC: Exit to Shell (use "save" command to store)       ', 0
+db ' microDOS Text Editor | ESC: Exit | save command to store ', 0
 
-; =============================================
-; MAIN DATA
-; =============================================
+boo_top:
+db '          ', 0
 
-banner          db 'microDOS v0.9 - 16-bit OS', 0x0d, 0x0a
+boo_mid:
+db 0x0d, 0x0a
+db '     .-.', 0x0d, 0x0a
+db '   .   .', 0x0d, 0x0a
+db '   :g g   :', 0x0d, 0x0a
+db '   : o    .', 0x0d, 0x0a
+db '  :         ..', 0x0d, 0x0a
+db ' :             .', 0x0d, 0x0a
+db ':  :         .   .', 0x0d, 0x0a
+db ':   :          . .', 0x0d, 0x0a
+db ' .. :            . ..', 0x0d, 0x0a
+db '    :;             :', 0x0d, 0x0a
+db '       :              ..', 0x0d, 0x0a
+db '        .              .     .', 0x0d, 0x0a
+db '          ---..,___;.-', 0x0d, 0x0a, 0
+gfx_menu:
+db 'microDOS v0.9.1 Graphics Demo', 0x0d, 0x0a, 0x0a
+db 'Select mode:', 0x0d, 0x0a
+db '  1 - Gradient', 0x0d, 0x0a
+db '  2 - Chessboard', 0x0d, 0x0a
+db '  3 - Plasma', 0x0d, 0x0a, 0x0a
+db 'Press 1, 2 or 3', 0
+
+gfx_title        db 'microDOS Graphics Demo', 0
+gfx_chess_title  db 'microDOS Chessboard', 0
+gfx_plasma_title db 'microDOS Plasma', 0
+gfx_hint         db 'Press any key to return...', 0
+
+banner          db 'microDOS v0.9.1 - 16-bit OS', 0x0d, 0x0a
                 db 'help for commands', 0x0d, 0x0a, 0
 prompt          db '> ', 0
 unknown_msg     db 'unknown command', 0x0d, 0x0a, 0
 help_msg        db 'commands:', 0x0d, 0x0a
                 db '  help      - show this help', 0x0d, 0x0a
-                db '  dir       - list files on disk', 0x0d, 0x0a
-                db '  type      - display file content', 0x0d, 0x0a
-                db '  save      - save editor text to disk', 0x0d, 0x0a
-                db '  edit      - simple text editor', 0x0d, 0x0a
-                db '  time      - show system time', 0x0d, 0x0a
+                db '  dir       - list files', 0x0d, 0x0a
+                db '  type      - view file', 0x0d, 0x0a
+                db '  save      - save editor text', 0x0d, 0x0a
+                db '  edit      - text editor', 0x0d, 0x0a
+                db '  time      - system time', 0x0d, 0x0a
                 db '  clear     - clear screen', 0x0d, 0x0a
-                db '  info      - system information', 0x0d, 0x0a
-                db '  neofetch  - pretty system info', 0x0d, 0x0a
-                db '  calc      - calculator (e.g., 5+3)', 0x0d, 0x0a
-                db '  snake     - play snake game', 0x0d, 0x0a
-                db '  gfx       - simple graphics demo', 0x0d, 0x0a
-                db '  visual16  - enter Visual16 shell', 0x0d, 0x0a
+                db '  info      - system info', 0x0d, 0x0a
+                db '  neofetch  - pretty info', 0x0d, 0x0a
+                db '  calc      - calculator', 0x0d, 0x0a
+                db '  snake     - snake game', 0x0d, 0x0a
+                db '  boo       - ASCII ghost', 0x0d, 0x0a
+                db '  visual16  - GRUB-style shell', 0x0d, 0x0a
                 db '  theme white/black - change theme', 0x0d, 0x0a
-                db '  reboot    - restart computer', 0x0d, 0x0a, 0
+                db '  reboot    - restart', 0x0d, 0x0a, 0
 time_msg        db 'time: ', 0
 colon           db ':', 0
 reboot_msg      db 'reboot...', 0x0d, 0x0a, 0
-info_msg        db 'microDOS v0.9', 0x0d, 0x0a
+info_msg        db 'microDOS v0.9.1', 0x0d, 0x0a
                 db '16-bit, Real mode', 0x0d, 0x0a
-                db 'written in NASM (with FlatFS)', 0x0d, 0x0a, 0
+                db 'written in NASM', 0x0d, 0x0a, 0
 crlf            db 0x0d, 0x0a, 0
 
 neo_logo        db 0x0d, 0x0a
-                db '_   _  ____ ____  ____  ____  ____  ____ ', 0x0d, 0x0a
-                db '/ \__/|/ \/   _Y  __\/  _ \/  _ \/  _ \/ ___\\', 0x0d, 0x0a
-                db '| |\/||| ||  / |  \/|| / \|| | \|| / \||    \\', 0x0d, 0x0a
-                db '| |  ||| ||  \_|    /| \_/|| |_/|| \_/|\___ |', 0x0d, 0x0a
-                db '\_/  \|\_/\____|_/\_\\____/\____/\____/\____/', 0x0d, 0x0a
+                db '  _   _  ____ ____  ____  ____  ____  ____ ', 0x0d, 0x0a
+                db ' / \__/|/ \/   _Y  __\/  _ \/  _ \/  _ \/ ___\', 0x0d, 0x0a
+                db ' | |\/||| ||  / |  \/|| / \|| | \|| / \||    \', 0x0d, 0x0a
+                db ' | |  ||| ||  \_|    /| \_/|| |_/|| \_/|\___ |', 0x0d, 0x0a
+                db ' \_/  \|\_/\____|_/\_\\____/\____/\____/\____/', 0x0d, 0x0a
                 db 0
-neo_os          db 'OS:           microDOS 0.9', 0x0d, 0x0a, 0
+neo_os          db 'OS:           microDOS 0.9.1', 0x0d, 0x0a, 0
 neo_kernel      db 'Kernel:       16-bit x86', 0x0d, 0x0a, 0
 neo_arch        db 'Architecture: 8086/80286', 0x0d, 0x0a, 0
 neo_time_label  db 'Time:         ', 0
@@ -2580,9 +2746,9 @@ calc_divzero    db 'Division by zero!', 0x0d, 0x0a, 0
 
 theme_white     db 'white', 0
 theme_black     db 'black', 0
-theme_ok_white  db 'Theme: WHITE (black on white)', 0x0d, 0x0a, 0
-theme_ok_black  db 'Theme: BLACK (white on black)', 0x0d, 0x0a, 0
-theme_unknown   db 'Unknown theme. Use: theme white / theme black', 0x0d, 0x0a, 0
+theme_ok_white  db 'Theme: WHITE', 0x0d, 0x0a, 0
+theme_ok_black  db 'Theme: BLACK', 0x0d, 0x0a, 0
+theme_unknown   db 'Unknown theme.', 0x0d, 0x0a, 0
 theme_help      db 'Usage: theme white / theme black', 0x0d, 0x0a, 0
 
 snake_over_msg  db 'Game Over! Press any key...', 0x0d, 0x0a, 0
@@ -2606,8 +2772,8 @@ cmd_calc        db 'calc', 0
 cmd_snake       db 'snake', 0
 cmd_theme       db 'theme', 0
 cmd_edit        db 'edit', 0
-cmd_gfx         db 'gfx', 0
 cmd_visual16    db 'visual16', 0
+cmd_boo         db 'boo', 0
 
 fs_dir_title    db ' microDOS FlatFS Directory:', 0x0d, 0x0a
                 db ' NAME        SIZE', 0x0d, 0x0a
@@ -2618,11 +2784,9 @@ fs_empty_lbl    db ' (no files on disk)', 0x0d, 0x0a, 0
 fs_prompt_name  db 'Filename: ', 0
 fs_prompt_save  db 'Save as filename: ', 0
 fs_not_found    db 'File not found!', 0x0d, 0x0a, 0
-fs_save_ok      db 'File saved successfully to disk.', 0x0d, 0x0a, 0
-fs_err_full     db 'Error: Directory is full (max 32 files)!', 0x0d, 0x0a, 0
-fs_err_empty_buf db 'Error: Editor buffer is empty! Write text in "edit" first.', 0x0d, 0x0a, 0
-fs_err_read     db 'Disk error reading sector!', 0x0d, 0x0a, 0
-fs_err_write    db 'Disk error writing sector!', 0x0d, 0x0a, 0
+fs_save_ok      db 'File saved.', 0x0d, 0x0a, 0
+fs_err_full     db 'Directory full!', 0x0d, 0x0a, 0
+fs_err_empty_buf db 'Editor buffer empty!', 0x0d, 0x0a, 0
 
 boot_drive      db 0x00
 
@@ -2634,7 +2798,3 @@ editor_buffer   times 1024 db 0
 
 fs_dir_buffer   times 512 db 0
 fs_file_buffer  times 1024 db 0
-
-gfx_title       db 'microDOS 0.9 VGA Graphics', 0
-gfx_box_text    db 'Mode 13h', 0
-gfx_hint        db 'Press any key to return...', 0
