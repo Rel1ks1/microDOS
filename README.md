@@ -3,5 +3,5 @@
 </p>
 <p align="center">
                                                     microDOS
-                                     microDOS-16 bit OS for testing your devise 
+                                     microDOS-32 bit OS for testing your devise 
 </p>
